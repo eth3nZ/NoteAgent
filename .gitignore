@@ -4,5 +4,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .coverage
+build/
+dist/
+*.egg-info/
 NoteAgent_Output/
+dev_artifacts/
 *.log

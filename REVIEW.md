@@ -1,3 +1,5 @@
+> Historical review below. The current OpenRouter workflow and verification boundary are documented in [README.md](README.md).
+
 # NoteAgent review
 
 Reviewed and repaired in the isolated sibling folder on October 9, 2026. The original `NoteAgent` folder was not modified.

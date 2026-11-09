@@ -73,7 +73,58 @@ class NoteEvaluator:
             score += 4
             issues.append(self._message(language, "内容需要分段", "The content needs paragraph breaks"))
 
-        return min(100, score), issues
+        penalties = 0
+        if re.search(
+            r"<a\s+[^>]*id=|^#{1,6}\s+(?:page|slide|第)\s*\d+|"
+            r"\[[^\]]*(?:page|第)\s*\d+[^\]]*\]\(#page-\d+\)",
+            note_content,
+            re.IGNORECASE | re.MULTILINE,
+        ):
+            penalties += 15
+            issues.append(
+                self._message(
+                    language,
+                    "存在逐页标题、目录链接或 HTML 锚点",
+                    "Page-by-page headings, TOC links, or HTML anchors remain",
+                )
+            )
+
+        if re.search(
+            r"process finished with exit code|"
+            r"^(?:\*\*)?(?:IDE Context|Status Bar|Python Version|Line Endings)(?:\*\*)?\s*:",
+            note_content,
+            re.IGNORECASE | re.MULTILINE,
+        ):
+            penalties += 12
+            issues.append(
+                self._message(
+                    language,
+                    "仍包含终端或 IDE 界面噪声",
+                    "Terminal or IDE interface noise remains",
+                )
+            )
+
+        if re.match(r"^\s*```(?:markdown|md)\s*$", note_content.splitlines()[0], re.IGNORECASE):
+            penalties += 15
+            issues.append(
+                self._message(
+                    language,
+                    "整份笔记被错误包裹在 Markdown 代码块中",
+                    "The entire note is incorrectly wrapped in a Markdown fence",
+                )
+            )
+
+        if len(re.findall(r"(?m)^#\s+\S", note_content)) != 1:
+            penalties += 8
+            issues.append(
+                self._message(
+                    language,
+                    "文档必须且只能有一个一级标题",
+                    "The document must contain exactly one level-one title",
+                )
+            )
+
+        return max(0, min(100, score) - penalties), issues
 
     def _calculate_coverage(self, note_content: str, raw_content: str) -> float:
         if not raw_content.strip():

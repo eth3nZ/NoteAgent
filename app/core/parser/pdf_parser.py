@@ -3,7 +3,7 @@ PDF Parser - Extracts text and generates page screenshots using PyMuPDF.
 """
 
 import os
-import tempfile
+from app.core.maintenance import create_workspace
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -29,10 +29,10 @@ class PDFParser:
             temp_dir: Directory for temporary screenshot files
         """
         self.pdf_path = pdf_path
-        self.temp_dir = temp_dir or tempfile.mkdtemp(prefix="noteagent_pdf_")
+        self.temp_dir = temp_dir or create_workspace("pdf")
         self.doc: Optional[fitz.Document] = None
 
-    def parse(self, dpi: int = 200) -> List[PageContent]:
+    def parse(self, dpi: int = 200, cancel_callback=None) -> List[PageContent]:
         """
         Parse PDF: extract text and generate screenshots for each page.
 
@@ -52,6 +52,8 @@ class PDFParser:
         pages: List[PageContent] = []
 
         for page_num in range(len(self.doc)):
+            if cancel_callback and cancel_callback():
+                raise InterruptedError("Document parsing cancelled")
             page = self.doc[page_num]
 
             # Extract text

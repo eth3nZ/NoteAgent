@@ -1,5 +1,6 @@
 """Jupyter Notebook output that preserves Markdown/code ordering."""
 
+import ast
 import re
 from typing import List
 
@@ -50,7 +51,7 @@ class NotebookGenerator:
             self._append_markdown(cells, content[position:match.start()])
             language = match.group(1).strip().lower()
             code = match.group(2).rstrip()
-            if language in self.PYTHON_LANGUAGES:
+            if language in self.PYTHON_LANGUAGES and self._is_python(code):
                 cells.append(new_code_cell(source=code))
             else:
                 fenced = f"```{match.group(1).strip()}\n{code}\n```"
@@ -59,6 +60,16 @@ class NotebookGenerator:
 
         self._append_markdown(cells, content[position:])
         return cells
+
+    @staticmethod
+    def _is_python(code: str) -> bool:
+        # Screenshots can contain output or incomplete snippets mislabeled as Python.
+        # Preserve those verbatim as Markdown rather than creating invalid code cells.
+        try:
+            ast.parse(code)
+        except (SyntaxError, ValueError):
+            return False
+        return True
 
     def _append_markdown(self, cells: List[nbformat.NotebookNode], text: str) -> None:
         text = text.strip()

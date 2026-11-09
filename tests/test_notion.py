@@ -3,10 +3,41 @@ import unittest
 
 import httpx
 
-from app.core.notion import NotionClient
+from app.core.notion import NotionClient, prepare_notion_markdown
 
 
 class NotionTests(unittest.TestCase):
+    def test_math_conversion_preserves_code_and_existing_dollar_math(self):
+        markdown = r"""Inline \(x_i + 1\), existing $y=2$.
+\[ \sigma(z) = \frac{1}{1+e^{-z}} \]
+`r'\(not math\)'`
+```python
+pattern = r'\[literal\]'
+print(r'\(unchanged\)')
+```
+~~~text
+\(also unchanged\)
+~~~
+"""
+        result = prepare_notion_markdown(markdown)
+        self.assertIn("Inline $x_i + 1$, existing $y=2$.", result)
+        self.assertIn("$$\n" + r"\sigma(z) = \frac{1}{1+e^{-z}}" + "\n$$", result)
+        for snippet in ["`r'\\(not math\\)'`", "pattern = r'\\[literal\\]'", "print(r'\\(unchanged\\)')", "~~~text\n\\(also unchanged\\)\n~~~"]:
+            self.assertIn(snippet, result)
+        self.assertEqual(prepare_notion_markdown(result), result)
+
+    def test_both_publication_modes_prepare_math(self):
+        payloads = []
+        def handler(request):
+            payloads.append(json.loads(request.content))
+            return httpx.Response(200, json={"id": "01234567-89ab-cdef-0123-456789abcdef"})
+        client = NotionClient("test", transport=httpx.MockTransport(handler))
+        page = "0123456789abcdef0123456789abcdef"
+        client.create_child_page(page, "Lecture", r"Formula \(x=2\)")
+        client.append_to_page(page, r"Formula \(x=2\)")
+        self.assertEqual(payloads[0]["markdown"], "Formula $x=2$")
+        self.assertIn("Formula $x=2$", payloads[1]["insert_content"]["content"])
+
     def test_create_child_page_with_markdown(self):
         seen = {}
 

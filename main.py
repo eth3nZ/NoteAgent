@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QFont
+from app.ui.branding import application_icon
 from app.ui.main_window import MainWindow
 
 
@@ -19,6 +20,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("NoteAgent")
     app.setOrganizationName("NoteAgent")
+    app.setWindowIcon(application_icon())
 
     # Set default font
     font = QFont()

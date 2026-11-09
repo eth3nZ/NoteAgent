@@ -6,6 +6,7 @@ from typing import Callable, List, Optional
 
 from app.core.agent.evaluator import NoteEvaluator
 from app.core.agent.optimizer import NoteOptimizer
+from app.core.prompt_loader import render_prompt
 from app.core.vision.vision_client import ModelAPIError, VisionClient
 
 
@@ -21,7 +22,9 @@ class SelfImprovingGenerator:
     """Generate notes without silently truncating long documents."""
 
     QUALITY_THRESHOLD = 82
-    MAX_INPUT_CHARS = 70_000
+    # Groq's free multimodal tier can reject a single request above roughly
+    # 7K input tokens. Keep room for prompt instructions and provider variance.
+    MAX_INPUT_TOKENS = 4_500
     MAX_OPTIMIZATIONS = 1
 
     def __init__(
@@ -94,36 +97,13 @@ class SelfImprovingGenerator:
         language: str,
         stream_callback: Optional[Callable[[str], None]] = None,
     ) -> str:
-        if language == "zh":
-            system = "你是专业的学习笔记编辑。忠实重组资料，不添加未经资料支持的事实。"
-            prompt = f"""把下面逐页解析结果整理成连贯、可复习的中文 Markdown 笔记。
-
-资料：
----
-{raw_content}
----
-
-要求：
-1. 合并重复内容，但保留重要定义、步骤、公式、示例、代码和图表含义。
-2. 使用清晰的标题层级与要点；不要写“第几页说了什么”式流水账。
-3. 不得省略因视觉解析得到而原始文本中没有的关键信息。
-4. 代码块必须带语言标注，公式使用 LaTeX。
-5. 直接输出笔记，不要解释你的过程，也不要用代码围栏包住整份笔记。"""
-        else:
-            system = "You are a professional study-note editor. Restructure faithfully and add no unsupported facts."
-            prompt = f"""Turn the page-by-page analysis below into cohesive, reviewable Markdown notes.
-
-Material:
----
-{raw_content}
----
-
-Requirements:
-1. Merge repetition while preserving definitions, procedures, formulas, examples, code, and diagram meaning.
-2. Use a clear heading hierarchy and concise points, not a page-by-page narration.
-3. Preserve important details recovered visually even when absent from extracted text.
-4. Label fenced code blocks and use LaTeX for formulas.
-5. Return only the notes; do not explain your process or wrap the whole response in a code fence."""
+        output_language = "Chinese" if language == "zh" else "English"
+        system = render_prompt("generation_system", language=output_language)
+        prompt = render_prompt(
+            "generation_user",
+            language=output_language,
+            raw_content=raw_content,
+        )
 
         return self.vision_client.complete_text(
             [
@@ -134,7 +114,7 @@ Requirements:
         )
 
     def _chunk_content(self, content: str) -> List[str]:
-        if len(content) <= self.MAX_INPUT_CHARS:
+        if self._estimate_tokens(content) <= self.MAX_INPUT_TOKENS:
             return [content]
 
         sections = re.split(r"(?=\n?<!-- NOTEAGENT_PAGE:\d+ -->)", content)
@@ -144,22 +124,60 @@ Requirements:
 
         chunks: List[str] = []
         current: List[str] = []
-        current_length = 0
+        current_tokens = 0
         for section in sections:
-            if len(section) > self.MAX_INPUT_CHARS:
+            section_tokens = self._estimate_tokens(section)
+            if section_tokens > self.MAX_INPUT_TOKENS:
                 if current:
                     chunks.append("\n\n".join(current))
-                    current, current_length = [], 0
-                chunks.extend(
-                    section[start:start + self.MAX_INPUT_CHARS]
-                    for start in range(0, len(section), self.MAX_INPUT_CHARS)
-                )
+                    current, current_tokens = [], 0
+                chunks.extend(self._split_oversized_section(section))
                 continue
-            if current and current_length + len(section) + 2 > self.MAX_INPUT_CHARS:
+            if current and current_tokens + section_tokens > self.MAX_INPUT_TOKENS:
                 chunks.append("\n\n".join(current))
-                current, current_length = [], 0
+                current, current_tokens = [], 0
             current.append(section)
-            current_length += len(section) + 2
+            current_tokens += section_tokens
         if current:
             chunks.append("\n\n".join(current))
         return chunks or [content]
+
+    def _split_oversized_section(self, section: str) -> List[str]:
+        """Split a very large page without dropping any source material."""
+        parts = [part.strip() for part in section.split("\n\n") if part.strip()]
+        if len(parts) <= 1:
+            max_chars = max(1, self.MAX_INPUT_TOKENS * 2)
+            return [
+                section[start:start + max_chars]
+                for start in range(0, len(section), max_chars)
+            ]
+
+        chunks: List[str] = []
+        current: List[str] = []
+        current_tokens = 0
+        for part in parts:
+            part_tokens = self._estimate_tokens(part)
+            if part_tokens > self.MAX_INPUT_TOKENS:
+                if current:
+                    chunks.append("\n\n".join(current))
+                    current, current_tokens = [], 0
+                max_chars = max(1, self.MAX_INPUT_TOKENS * 2)
+                chunks.extend(
+                    part[start:start + max_chars]
+                    for start in range(0, len(part), max_chars)
+                )
+                continue
+            if current and current_tokens + part_tokens > self.MAX_INPUT_TOKENS:
+                chunks.append("\n\n".join(current))
+                current, current_tokens = [], 0
+            current.append(part)
+            current_tokens += part_tokens
+        if current:
+            chunks.append("\n\n".join(current))
+        return chunks
+
+    def _estimate_tokens(self, content: str) -> int:
+        """Conservative dependency-free estimate for English, code, and CJK."""
+        cjk_count = len(re.findall(r"[\u3400-\u9fff]", content))
+        other_count = max(0, len(content) - cjk_count)
+        return cjk_count + (other_count + 2) // 3

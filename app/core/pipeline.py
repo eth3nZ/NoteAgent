@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from app.core.agent.self_improving import GenerationResult, SelfImprovingGenerator
-from app.core.generator.markdown import MarkdownGenerator
+from app.core.generator.markdown import MarkdownGenerator, render_source_pages
 from app.core.generator.notebook import NotebookGenerator
+from app.core.maintenance import create_workspace
 from app.core.notion import NotionClient, NotionPublishResult
 from app.core.parser.pdf_parser import PDFParser
 from app.core.parser.pptx_parser import PPTXParser
@@ -33,6 +34,15 @@ class PipelineResult:
     iterations: int
     notion: Optional[NotionPublishResult] = None
     warnings: List[str] = field(default_factory=list)
+    task_id: str = ""
+    status: str = "completed"
+    completed_pages: List[int] = field(default_factory=list)
+    cost_usd: float = 0.0
+    reason: str = ""
+    retry_at: Optional[float] = None
+    paid_eligible: bool = False
+    free_requests_remaining: Optional[int] = None
+    segment_pages: int = 8
 
 
 class Pipeline:
@@ -44,13 +54,37 @@ class Pipeline:
         self_improving_generator: Optional[SelfImprovingGenerator] = None,
         markdown_generator: Optional[MarkdownGenerator] = None,
         notebook_generator: Optional[NotebookGenerator] = None,
+        store=None,
+        paid_client=None,
+        document_limit: float = .10,
+        monthly_limit: float = 1.0,
     ):
         self.vision_client = vision_client
         self.generator = self_improving_generator or SelfImprovingGenerator(vision_client)
         self.md_generator = markdown_generator or MarkdownGenerator()
         self.nb_generator = notebook_generator or NotebookGenerator()
+        self.store = store
+        self.paid_client = paid_client
+        self.document_limit = document_limit
+        self.monthly_limit = monthly_limit
 
-    def run(
+    def run(self, input_path: str, output_dir: str, output_format: str = "md",
+            language: str = "zh", progress_callback=None, stream_callback=None,
+            cancel_callback=None, notion_client=None, notion_page_id="", notion_mode="none",
+            task_id=None, state_callback=None, allow_paid=False, action="generate",
+            include_source_pages: Optional[bool] = None) -> PipelineResult:
+        if hasattr(self.vision_client, "generate_segment") or (self.store is not None and action != "generate"):
+            from app.core.jobs import DocumentJob
+            return DocumentJob(self).run(
+                input_path, output_dir, output_format, language, progress_callback,
+                stream_callback, cancel_callback, notion_client, notion_page_id,
+                notion_mode, task_id, state_callback, allow_paid, action, include_source_pages)
+        # Keep the old injected page/generator API working for existing integrations.
+        return self._run_legacy(input_path, output_dir, output_format, language,
+                                progress_callback, stream_callback, cancel_callback,
+                                notion_client, notion_page_id, notion_mode, bool(include_source_pages))
+
+    def _run_legacy(
         self,
         input_path: str,
         output_dir: str,
@@ -62,6 +96,7 @@ class Pipeline:
         notion_client: Optional[NotionClient] = None,
         notion_page_id: str = "",
         notion_mode: str = "none",
+        include_source_pages: bool = False,
     ) -> PipelineResult:
         input_path = str(Path(input_path).expanduser().resolve())
         if not os.path.isfile(input_path):
@@ -115,6 +150,7 @@ class Pipeline:
                         screenshot_path=page.screenshot_path or "",
                         language=language,
                     )
+                    analysis.content = self.md_generator.sanitize_fragment(analysis.content)
                 except ModelAPIError as exc:
                     if "429" not in str(exc):
                         raise
@@ -163,7 +199,23 @@ class Pipeline:
             )
 
         self._check_cancel(cancel_callback)
-        markdown = self.md_generator.prepare_document(generation.content, title)
+        audit = self.md_generator.audit_document(generation.content, title)
+        markdown = render_source_pages(audit.content, include_source_pages)
+        if audit.corrections:
+            self._progress(
+                progress_callback,
+                language,
+                f"格式审核已自动修正 {len(audit.corrections)} 类问题",
+                f"Format review automatically corrected {len(audit.corrections)} issue type(s)",
+            )
+        if audit.issues:
+            warning = (
+                "格式审核仍发现：" + "；".join(audit.issues)
+                if language == "zh"
+                else "Format review still found: " + "; ".join(audit.issues)
+            )
+            warnings.append(warning)
+            generation.score = min(generation.score, max(0, 100 - 15 * len(audit.issues)))
         output_path = self._save_output(markdown, input_path, output_dir, output_format, title)
         self._progress(
             progress_callback,
@@ -211,7 +263,13 @@ class Pipeline:
         )
 
     def _make_parser(self, input_path: str):
-        return PDFParser(input_path) if get_file_extension(input_path) == ".pdf" else PPTXParser(input_path)
+        pdf = get_file_extension(input_path) == ".pdf"
+        workspace = None
+        if self.store is not None:
+            root = self.store.path.parent/'workspaces'
+            root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            workspace = create_workspace('pdf' if pdf else 'pptx', root)
+        return PDFParser(input_path, workspace) if pdf else PPTXParser(input_path, workspace)
 
     def _combine_source(self, pages: list, analyses: List[PageAnalysis], language: str) -> str:
         analysis_by_page = {analysis.page_num: analysis for analysis in analyses}
@@ -230,7 +288,7 @@ class Pipeline:
 
     def _text_fallback(self, page, language: str) -> PageAnalysis:
         empty = "*（未提取到文本）*" if language == "zh" else "*(No text extracted)*"
-        content = page.text.strip() if page.text else empty
+        content = self.md_generator.sanitize_fragment(page.text.strip()) if page.text else empty
         return PageAnalysis(page.page_num, content, content)
 
     def _save_output(
