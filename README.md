@@ -11,7 +11,7 @@ NoteAgent is a small Python desktop app built with PyQt6. Models run through a c
 You need **Python 3.10 or newer**, an internet connection for generation, and a model-service API key. The commands below are for macOS/Linux; macOS is the current desktop validation target.
 
 ```bash
-git clone https://github.com/eth3nZ/NewsAgent.git NoteAgent
+git clone https://github.com/eth3nZ/NoteAgent.git NoteAgent
 cd NoteAgent
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
