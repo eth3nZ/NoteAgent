@@ -108,13 +108,58 @@ Export/publishing displays its current operation inline. Scheduled free retries 
 
 ## Optional: publish to Notion
 
-1. Create a Notion integration and copy its token.
-2. Connect that integration to your destination page and allow it to insert/update content.
-3. Open **Settings → Notion**, enter **Integration token** and **Page URL**, then **Save**. `NOTION_TOKEN` is also supported as an environment variable.
-4. Enable **Send to Notion** in the main window.
-5. Choose **Create child page** for a separate note, or **Append to page** to add content to the destination.
+You need **your own Notion connection token** and **a destination page link**. The Notion token is separate from your OpenRouter/model-service key. Set this up once for the workspace where you want your notes.
 
-Generation saves the local file first, then publishes. For completed notes not yet published, **More → Send to Notion** is a separate action; it does not run the model again. **More → Open in Notion** opens an existing publication. If a write fails, check the destination before selecting **More → Retry Notion** because the previous write may already have arrived. Identical confirmed writes are skipped within the saved task.
+### 1. Create a Notion connection and get its token
+
+1. Sign in to the [Notion Developer portal](https://app.notion.com/developers/connections) with the account that owns your destination workspace.
+2. In **Build → Internal connections**, create a connection named **NoteAgent** and select that workspace. Creating an internal connection requires a workspace owner; ask the owner if this option is unavailable.
+3. Open its **Configuration** tab. Under capabilities, enable **Insert content** for creating notes and **Update content** for appending to a page. User information can stay set to **No user information**. Save the capability changes.
+4. Copy the connection's API token from Configuration. Some Notion screens call it an **Internal Integration Secret**. Keep this value for the app's **Integration token** field; paste just the token, without a `Bearer` prefix. Store it privately.
+
+These steps use an internal connection token; this version of NoteAgent does not provide an OAuth sign-in button. See Notion's [internal connection setup](https://developers.notion.com/guides/connections-and-tokens/internal-connections) and [capability descriptions](https://developers.notion.com/reference/capabilities).
+
+### 2. Give the connection access to your page
+
+1. In the same Notion workspace, create or open an ordinary page, for example **Course Notes**. Use a page as the destination, rather than a database or database-view link.
+2. Open the page's **••• → Connections → Add connections**, search for **NoteAgent**, and confirm access. In some Notion layouts, Connections is inside **More**. Alternatively, open the connection in the Developer portal and use **Content access → Edit access** to select the page.
+3. Copy that page's link using **Share → Copy link**. You can paste the complete link into NoteAgent; there is no need to extract the page ID yourself.
+
+**A token alone does not grant page access.** The page can remain private. Granting the connection access to a parent also grants access to its child pages, so choose the destination deliberately. Notion documents [page connections here](https://www.notion.com/help/add-and-manage-connections-with-the-api).
+
+### 3. Save the settings and publish
+
+1. In NoteAgent, open **Settings → Notion** and fill in:
+
+   | Field | What to paste |
+   | --- | --- |
+   | **Integration token** | The Notion connection token from step 1. |
+   | **Page URL** | The destination page link from step 2. |
+
+2. Select **Save**. On macOS, the token is saved in Keychain. `NOTION_TOKEN` is also supported as an environment variable instead of a saved token.
+3. Enable **Send to Notion** in the main window and choose:
+
+   | Mode | Result |
+   | --- | --- |
+   | **Create child page** — recommended | A separate note inside your destination, such as `Course Notes → Lecture 7`. |
+   | **Append to page** | Adds the notes at the end of the destination page. |
+
+4. For an existing completed note, select **More → Send to Notion**. For a new document, select **Create notes**; the app saves the local file before publishing.
+5. After success, select **More → Open in Notion** and check the result.
+
+**Configured** means a destination is entered; saving settings does not test Notion access. **Test connection** in the Models tab tests the model service only. Publishing an existing completed note is the way to verify Notion setup without another model request.
+
+### If connecting or publishing fails
+
+| Problem | Check |
+| --- | --- |
+| NoteAgent is missing from **Add connections** | The connection and page must belong to the same workspace. Check the browser account and any workspace administrator restrictions. |
+| **401** | Copy the current Notion token again; remove any `Bearer` prefix. A model-service key does not work here. |
+| **403** | Check **Insert content**, **Update content**, and the page's connection access. |
+| **404** | Check the page link and explicitly connect the page; Notion can also return this when the connection has no access. |
+| Keychain credential unavailable | Unlock the login Keychain, then choose **Settings → Save** or enter the token again. |
+
+If a write fails, inspect the destination before selecting **More → Retry Notion** because the previous write may already have arrived. Local notes stay available, and retrying publication does not rerun the model. Identical confirmed writes are skipped within the saved task.
 
 Notion receives text, native formulas, tables and code blocks. Original page images are not uploaded to Notion, and notebooks are not executed there. You can also import the generated Markdown manually.
 
