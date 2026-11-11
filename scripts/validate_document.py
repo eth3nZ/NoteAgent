@@ -18,6 +18,7 @@ import nbformat
 
 from app.core.cloud import BASE_URL, FREE_MODEL, CloudClient, CloudError, ModelConfig, fetch_account_quota
 from app.core.configuration import migrate_config
+from app.core.settings_store import SettingsStore
 from app.core.pipeline import Pipeline
 from app.core.preflight import inspect_document
 from app.core.task_store import TaskStore
@@ -82,7 +83,10 @@ def main():
                         help="Test language (default: en); normal app generation follows its language setting")
     parser.add_argument("--include-source-pages", action="store_true", help="Include source-page references in exported notes")
     args = parser.parse_args()
-    saved = migrate_config(load_config(str(args.config)))
+    saved = (SettingsStore(args.config).load(fields=("api_key",)).config if args.live else
+             migrate_config(load_config(str(args.config))))
+    if args.live and saved.get("provider") == "openrouter" and "api_key" in saved.get("_unavailable_credentials", ()):
+        parser.error("The saved key is unavailable. Unlock Keychain and save Settings, or enter the key again.")
     model = args.model or (saved.get("vision_model") if saved.get("provider") == "openrouter" else FREE_MODEL)
     if not model or not model.endswith(":free") or model.startswith("openrouter/"):
         parser.error("This acceptance runner only permits a fixed :free model. Paid calls are disabled.")

@@ -1,8 +1,10 @@
 """Configuration defaults and compatibility with existing user settings."""
 
 import os
+from urllib.parse import urlparse
 
 from app.core.cloud import BASE_URL, FREE_MODEL, PAID_MODEL, CloudClient, ModelConfig
+from app.core.credentials import bound_secret
 
 
 def cloud_defaults():
@@ -26,14 +28,25 @@ def migrate_config(saved):
 
 
 def make_model_config(config, paid=False):
-    key = (config.get("paid_api_key") if paid else config.get("api_key")) or ""
-    if paid and not key and config.get("provider") == "openrouter":
-        key = config.get("api_key", "")
-    if not key:
+    key = bound_secret(config, "paid_api_key" if paid else "api_key")
+    unavailable = config.get("_unavailable_credentials", ())
+    blocked = ("paid_api_key" if paid else "api_key") in unavailable
+    if paid and not key and config.get("provider") == "openrouter" and not blocked:
+        blocked = "api_key" in unavailable
+        if not blocked:
+            key = bound_secret(config, "api_key")
+    if not key and not blocked:
         if paid or config.get("provider") == "openrouter":
             key = os.environ.get("OPENROUTER_API_KEY", "")
-        elif "groq.com" in config.get("base_url", ""):
-            key = os.environ.get("GROQ_API_KEY", "")
+        else:
+            try:
+                url = urlparse(config.get("base_url", ""))
+                if (url.scheme == "https" and url.hostname == "api.groq.com" and
+                        url.port in {None, 443} and not url.username and not url.password and
+                        not url.query and not url.fragment):
+                    key = os.environ.get("GROQ_API_KEY", "")
+            except ValueError:
+                pass
     providers = config.get("paid_providers" if paid else "free_providers", "")
     return ModelConfig(
         api_key=key, base_url=BASE_URL if paid or config.get("provider") == "openrouter" else config.get("base_url", BASE_URL),
@@ -45,4 +58,9 @@ def make_model_config(config, paid=False):
 
 
 def make_client(config, paid=False, transport=None):
+    unavailable = config.get("_unavailable_credentials", ())
+    field = "paid_api_key" if paid else "api_key"
+    if field in unavailable or (paid and not bound_secret(config, field) and
+                               config.get("provider") == "openrouter" and "api_key" in unavailable):
+        raise ValueError("A saved API key is unavailable. Unlock Keychain and choose Settings → Save, or enter its key again.")
     return CloudClient(make_model_config(config, paid), transport=transport)

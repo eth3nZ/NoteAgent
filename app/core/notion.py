@@ -111,15 +111,15 @@ class NotionClient:
                 with httpx.Client(
                     timeout=timeout,
                     transport=self.transport,
-                    follow_redirects=True,
+                    follow_redirects=False,
                 ) as client:
                     response = client.request(
                         method, f"{self.base_url}{path}", headers=headers, json=payload
                     )
-            except httpx.RequestError as exc:
-                raise NotionAPIError(f"Cannot reach Notion: {exc}") from exc
+            except httpx.RequestError:
+                raise NotionAPIError("Cannot reach Notion. Check your connection and retry.") from None
 
-            if response.status_code < 400:
+            if 200 <= response.status_code < 300:
                 try:
                     return response.json()
                 except ValueError as exc:
@@ -136,21 +136,16 @@ class NotionClient:
         raise NotionAPIError("Notion request failed")
 
     def _raise_error(self, response: httpx.Response) -> None:
-        try:
-            data = response.json()
-            message = data.get("message") or data.get("code") or response.reason_phrase
-        except ValueError:
-            message = response.text[:500] or response.reason_phrase
         hints = {
+            400: "Check the page and note format.",
             401: "Check the Notion token.",
             403: "Give the connection Insert/Update Content permission and connect it to this page.",
             404: "The page was not found or has not been shared with the connection.",
+            429: "Notion is rate limited. Wait before retrying.",
         }
-        hint = hints.get(response.status_code, "")
-        raise NotionAPIError(
-            f"Notion API error {response.status_code}: {message}"
-            + (f" {hint}" if hint else "")
-        )
+        hint = ("Notion redirected the request; publishing was stopped." if 300 <= response.status_code < 400 else
+                hints.get(response.status_code, "Notion is temporarily unavailable. Check the destination before retrying."))
+        raise NotionAPIError(f"Notion API error {response.status_code}. {hint}")
 
     def _page_url(self, page_id: str) -> str:
         return f"https://www.notion.so/{page_id.replace('-', '')}"

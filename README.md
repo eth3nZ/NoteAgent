@@ -153,12 +153,17 @@ A normal run saves only the selected `.md` or `.ipynb` file. Re-exported copies 
 | Location | Contents |
 | --- | --- |
 | Your output folder; default `~/Desktop/NoteAgent_Output` | Exported notes. |
-| `~/.noteagent_config.json` | Settings and any keys saved in the app. |
+| `~/.noteagent_config.json` | Non-sensitive settings and references to saved credentials. |
+| macOS login Keychain, service `org.noteagent.credentials` | Model keys and Notion integration token saved through Settings. |
 | `~/.noteagent/tasks.sqlite3` | Checkpoints, accepted notes and request/fee records. |
 | `~/.noteagent/workspaces/` | Temporary page-rendering files. |
 | `dev_artifacts/` | Development test reports and isolated test outputs. |
 
-Settings are written atomically with user-only file permissions. Keys are not stored in the task database; saved settings are a local JSON file, not an encrypted credential vault. Keep that file private.
+Settings are written atomically with user-only file permissions. On macOS, saved model keys and the Notion token use the system login Keychain; they are not stored in the task database or newly saved JSON. Credential records are isolated by configuration file and service address. Changing a custom service's host clears its key field; enter the key intended for the new service.
+
+When you next start the app, old plaintext keys are moved in a background worker: the app writes and reads back the Keychain entries before removing the JSON values. If Keychain is locked or access fails, the original file is retained and an inline message explains how to retry. Unlock your login Keychain in **Keychain Access**, then reopen the app or choose **Settings → Save**. A failed save leaves the settings window open with your input intact. Closing during a save waits for the atomic save to finish. Existing external backups of an old configuration are not erased by migration.
+
+Environment variables remain supported and are never copied into Keychain or JSON: `OPENROUTER_API_KEY`, `NOTION_TOKEN`, and `GROQ_API_KEY` for the exact HTTPS `api.groq.com` service on port 443. If an existing macOS Keychain credential is unavailable, the app pauses that connection instead of silently switching to an environment or backup-account key; unlock Keychain and retry Save. On other operating systems, newly entered keys last for the current session only; use environment variables after restarting. Legacy plaintext configurations remain readable, with a migration notice.
 
 The app performs cache cleanup in the background at startup. To check sizes or clean manually, open **Settings → Storage → Clean unused cache**.
 
@@ -170,6 +175,26 @@ The app performs cache cleanup in the background at startup. To check sizes or c
 - Cleanup keeps source files, exported notes, remote Notion pages and fee records. Regenerating expired content may consume model requests again.
 
 Historical `acceptance-*` and `ui-review` folders are development records, not application cache. They are not automatically deleted or uploaded with the source code.
+
+## Privacy and preventing key leaks
+
+Generation sends the selected pages' text and rendered images to your model service. Enabling Notion publishing also sends the notes to Notion. The native preview does not automatically fetch remote images or read linked local files, and generated notebook code is never executed by the app.
+
+OpenRouter routing remains unchanged: this version does **not** enforce zero data retention. Review [OpenRouter privacy settings](https://openrouter.ai/settings/privacy) and its [data collection](https://openrouter.ai/docs/guides/privacy/data-collection) and [provider policies](https://openrouter.ai/docs/guides/privacy/provider-logging) before uploading confidential material. Input/output logging, data-use permissions and strict retention settings affect privacy; stricter settings can make some free routes unavailable. Keychain reduces accidental file exposure; it does not protect credentials from a compromised application or computer.
+
+For contributors, environment files, local credential files, databases, private-key files and development outputs are ignored by Git. An ignore rule does not remove a credential already committed. This repository also includes a redacted **Gitleaks 8.30.1** workflow on pushes and pull requests; it scans all reachable Git history. It is a development tool, not an app dependency.
+
+Install Gitleaks **8.30.1** from its [official release](https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1), using the archive for your OS and checking its published SHA-256. Put the executable on your `PATH`, then run:
+
+```bash
+python3 scripts/check_secrets.py                 # All reachable Git history
+python3 scripts/check_secrets.py --staged        # Staged changes
+python3 scripts/check_secrets.py --install-hook  # Optional local commit check
+```
+
+The hook installer retains any existing pre-commit hook and prints the command to add manually. The wrapper requires the pinned scanner version and reports file locations without printing matched credentials. It exits with an error if the scanner is unavailable. To use an executable elsewhere, add `--binary /path/to/gitleaks` to a scan command.
+
+Repository administrators should also check **GitHub → Settings → Advanced Security → Secret Protection** and enable **Push protection** ([GitHub instructions](https://docs.github.com/en/code-security/how-tos/secure-your-secrets/prevent-future-leaks/enable-push-protection)). These account/repository switches are separate from the included workflow; their enabled state has not been verified. A workflow on a feature branch does not add it to other branches until merged. If a real credential is ever committed, revoke/replace it with the provider first; removing the file alone does not remove it from history.
 
 ## Troubleshooting
 

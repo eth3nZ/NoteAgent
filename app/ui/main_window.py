@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
 )
 
 from app.core.configuration import cloud_defaults, make_client, make_model_config, migrate_config
+from app.core.settings_store import SettingsStore
 from app.core.generator.markdown import render_source_pages
 from app.core.maintenance import clean_storage, format_bytes
 from app.core.notion import NotionClient, NotionPublishResult
@@ -27,7 +28,7 @@ from app.ui.components import ActivityPanel, BusyIndicator, MetricCard
 from app.ui.settings import SettingsDialog
 from app.ui.review import MarkdownBrowser, RevisionDialog, SourceDialog
 from app.ui.workers import TaskWorker
-from app.utils.helpers import load_config, save_config, validate_file_type
+from app.utils.helpers import load_config, validate_file_type
 
 
 APP_STYLE = """
@@ -171,7 +172,7 @@ class DropZone(QFrame):
 class MainWindow(QMainWindow):
     CONFIG_FILE = str(Path.home() / ".noteagent_config.json")
 
-    def __init__(self):
+    def __init__(self, credential_store=None):
         super().__init__()
         self.input_file = None
         self.worker = None
@@ -191,6 +192,9 @@ class MainWindow(QMainWindow):
         self._estimate = None
         self._estimate_context = self._active_context = None
         self._preflight = PreflightService()
+        self.settings_store = SettingsStore(self.CONFIG_FILE, credential_store)
+        self._credentials_ready = False
+        self._settings_notice = ""
         self._config = self._default_config()
         saved = load_config(self.CONFIG_FILE)
         self._has_language_preference = "language" in saved
@@ -517,7 +521,7 @@ class MainWindow(QMainWindow):
         return "resume"
 
     def _primary_action(self):
-        if self._busy() or not self._owns_lock:
+        if self._busy() or not self._owns_lock or not self._credentials_ready:
             return
         action = self._primary_mode()
         if action == "open":
@@ -580,7 +584,7 @@ class MainWindow(QMainWindow):
     def _begin_estimate(self):
         if self._closed or self._close_after_estimate or not self.input_file:
             return
-        if self._estimate_worker is not None or self._busy():
+        if self._estimate_worker is not None or self._busy() or not self._credentials_ready:
             self._estimate_pending = True
             self._sync_refresh_state()
             return
@@ -697,7 +701,7 @@ class MainWindow(QMainWindow):
             self.generate_button.setText('Export revision')
             tips[action] = 'Save the current revision to a new local file. No generation or Notion publishing.'
         self.generate_button.setToolTip("See the status above for the free retry time." if waiting else tips[action])
-        self.generate_button.setEnabled(not busy and not waiting and self._owns_lock)
+        self.generate_button.setEnabled(not busy and not waiting and self._owns_lock and self._credentials_ready)
         self.paid_button.setVisible(bool(result and result.paid_eligible and result.status != "completed"))
         self.paid_button.setEnabled(not busy and self._matches_current_task() and bool(self._config.get("paid_enabled")))
         self.cancel_button.setVisible(busy)
@@ -736,7 +740,7 @@ class MainWindow(QMainWindow):
         self.revision_status.setToolTip('Export the saved revision to update the local file.' if needs_export else 'Revisions keep the generated source-page notes intact.' if revised else '')
         for widget in (self.drop_zone, self.output_path, self.browse_output, self.format_combo,
                        self.language_combo, self.include_source_pages, self.publish_notion, self.settings_button):
-            widget.setEnabled(not busy)
+            widget.setEnabled(not busy and self._credentials_ready)
         self._update_notion_state()
         self._sync_refresh_state()
         self.activity.set_running(busy, busy and self.worker.isInterruptionRequested())
@@ -765,6 +769,7 @@ class MainWindow(QMainWindow):
         if self._closed:
             return
         def load(worker):
+            settings = self.settings_store.load(migrate=True)
             store = TaskStore(self.store_path)
             store.recover_interrupted()
             try:
@@ -780,8 +785,18 @@ class MainWindow(QMainWindow):
                 task['revision'] = store.latest_revision(task['id'])
                 if store.uncertain(task["id"]):
                     task["reason"] = "uncertain_cost"
-            return task
-        self._launch(load, self._restore_previous)
+            return settings, task
+        self._launch(load, self._startup_loaded)
+
+    def _startup_loaded(self, payload):
+        settings, task = payload
+        self._config.update(settings.config)
+        self._credentials_ready = True
+        self._settings_notice = settings.notice
+        self._restore_previous(task)
+        if settings.notice:
+            self.status.setText(settings.notice)
+            self.activity.add_event(settings.notice)
 
     def _restore_previous(self, task):
         if not task:
@@ -825,7 +840,8 @@ class MainWindow(QMainWindow):
             pipeline = Pipeline(primary, store=store, paid_client=backup,
                                 document_limit=float(config.get("document_limit", .10)),
                                 monthly_limit=float(config.get("monthly_limit", 1)))
-            token = config.get("notion_token") or os.environ.get("NOTION_TOKEN", "")
+            token = ("" if "notion_token" in config.get("_unavailable_credentials", ()) else
+                     config.get("notion_token") or os.environ.get("NOTION_TOKEN", ""))
             notion = NotionClient(token) if token else None
             result = pipeline.run(**arguments, notion_client=notion,
                                   progress_callback=worker.progress.emit, stream_callback=worker.stream.emit,
@@ -957,7 +973,7 @@ class MainWindow(QMainWindow):
 
     def _check_due(self):
         result = self.last_result
-        if QApplication.activeModalWidget() is not None or self.note_actions.isVisible():
+        if not self._credentials_ready or QApplication.activeModalWidget() is not None or self.note_actions.isVisible():
             return
         if (not self._closed and not self._busy() and self._matches_current_task() and
                 result.status == "waiting_quota" and result.retry_at and time.time() >= result.retry_at):
@@ -1026,6 +1042,10 @@ class MainWindow(QMainWindow):
         self._on_state(result)
 
     def _on_failure(self, message):
+        if not self._credentials_ready:
+            # A damaged task database must not make Settings permanently inaccessible.
+            self._credentials_ready = True
+            self._render_state()
         self.status.setText(message)
         self.activity.add_event(message)
 
@@ -1082,17 +1102,19 @@ class MainWindow(QMainWindow):
             self.output_path.setText(path)
 
     def _show_settings(self):
-        if self._busy():
+        if self._busy() or not self._credentials_ready or not self._owns_lock:
             return
-        dialog = SettingsDialog(self._config, self)
+        self._save_config()
+        dialog = SettingsDialog(self._config, self, settings_store=self.settings_store)
         dialog.cache_changed.connect(self._schedule_estimate)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self._config.update(dialog.values())
-            self._save_config()
+            self._config.update(dialog.saved_result.config)
+            self._settings_notice = dialog.saved_result.notice
             self._update_notion_state()
-            self.status.setText("Settings saved. Test the image route on each network you use.")
+            self.status.setText(dialog.saved_result.notice or "Settings saved. Test the image route on each network you use.")
             self._render_state()
             self._schedule_estimate(refresh=True)
+        dialog.deleteLater()
 
     def _update_notion_state(self):
         self.notion_mode.setEnabled(self.publish_notion.isChecked() and not self._busy())
@@ -1103,9 +1125,10 @@ class MainWindow(QMainWindow):
                              "language": self.language_combo.currentData(), "include_source_pages": self.include_source_pages.isChecked(),
                              "notion_mode": self.notion_mode.currentData() if self.publish_notion.isChecked() else "none"})
         try:
-            save_config(self._config, self.CONFIG_FILE)
-        except OSError as exc:
-            self.status.setText(f"Could not save settings: {exc}")
+            if self._owns_lock:
+                self.settings_store.save_preferences(self._config)
+        except OSError:
+            self.status.setText("Could not save preferences. Original settings were retained.")
 
     def _open_output(self):
         if self.last_result and self.last_result.output_path:

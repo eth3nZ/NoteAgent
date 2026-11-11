@@ -3,10 +3,37 @@ import unittest
 
 import httpx
 
-from app.core.notion import NotionClient, prepare_notion_markdown
+from app.core.notion import NotionAPIError, NotionClient, prepare_notion_markdown
 
 
 class NotionTests(unittest.TestCase):
+    def test_error_bodies_and_network_exceptions_do_not_expose_content(self):
+        private = "private-key-and-document-fragment"
+        for body in ({"message": private}, private):
+            def handler(request):
+                return httpx.Response(401, **({"json": body} if isinstance(body, dict) else {"text": body}))
+            client = NotionClient(private, transport=httpx.MockTransport(handler))
+            with self.assertRaises(NotionAPIError) as caught:
+                client.append_to_page("0123456789abcdef0123456789abcdef", private)
+            self.assertNotIn(private, str(caught.exception))
+            self.assertIn("401", str(caught.exception))
+        def offline(request):
+            raise httpx.ConnectError(private, request=request)
+        with self.assertRaises(NotionAPIError) as caught:
+            NotionClient(private, transport=httpx.MockTransport(offline)).append_to_page("0123456789abcdef0123456789abcdef", private)
+        self.assertNotIn(private, str(caught.exception))
+
+    def test_redirect_does_not_forward_notes_or_authorization(self):
+        requests = []
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(307, headers={"location": "https://untrusted.example/collect"})
+        client = NotionClient("dummy", transport=httpx.MockTransport(handler))
+        with self.assertRaisesRegex(NotionAPIError, "redirected"):
+            client.append_to_page("0123456789abcdef0123456789abcdef", "private notes")
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0].url.host, "api.notion.com")
+
     def test_math_conversion_preserves_code_and_existing_dollar_math(self):
         markdown = r"""Inline \(x_i + 1\), existing $y=2$.
 \[ \sigma(z) = \frac{1}{1+e^{-z}} \]

@@ -12,6 +12,8 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QCompleter, QDialog, QDialogB
 
 from app.core.cloud import BASE_URL, FREE_MODEL, list_note_models
 from app.core.configuration import make_client
+from app.core.credentials import SECRET_FIELDS, credential_origin
+from app.core.settings_store import SettingsResult
 from app.core.maintenance import clean_storage, format_bytes, storage_info
 from app.ui.workers import TaskWorker
 
@@ -92,7 +94,7 @@ QTabBar::tab:selected { color: #2F5545; border-bottom: 2px solid #2F5545; }
 class SettingsDialog(QDialog):
     cache_changed = pyqtSignal()
 
-    def __init__(self, config, parent=None, auto_refresh=True):
+    def __init__(self, config, parent=None, auto_refresh=True, settings_store=None):
         super().__init__(parent)
         self.setObjectName("settingsDialog")
         self.setWindowTitle("Settings")
@@ -100,6 +102,11 @@ class SettingsDialog(QDialog):
         self.resize(660, 680 if config.get("paid_enabled") or config.get("provider") == "custom" else 590)
         self.setStyleSheet(SETTINGS_STYLE)
         self._config = dict(config)
+        self.settings_store = settings_store
+        self.saved_result = None
+        self._saving = False
+        self._edited_secrets = set()
+        self._key_origin = credential_origin(config)
         self.worker = None
         self._closing = self._disposed = False
         self._auto_refresh = auto_refresh
@@ -277,6 +284,9 @@ class SettingsDialog(QDialog):
         self.paid_enabled.toggled.connect(self._paid_changed)
         self.fields["api_key"].editingFinished.connect(self._auto_load)
         self.fields["paid_api_key"].editingFinished.connect(lambda: self._auto_load(paid=True))
+        self.fields["base_url"].editingFinished.connect(self._custom_origin_changed)
+        for key in SECRET_FIELDS:
+            self.fields[key].textEdited.connect(lambda text, field=key: self._edited_secrets.add(field))
         self.tabs.currentChanged.connect(self._storage_selected)
         self._update_controls()
         if auto_refresh:
@@ -388,8 +398,17 @@ class SettingsDialog(QDialog):
             self.fields["base_url"].setText(BASE_URL)
             self.model_note.setText("Browse models first; add a key when you're ready to generate.")
         self._last_models["vision_model"] = values["vision_model"]
+        self._key_origin = credential_origin({"provider": self._service, "base_url": values["base_url"]})
         self._update_controls()
         self._auto_load()
+
+    def _custom_origin_changed(self):
+        origin = credential_origin({"provider": self.provider.currentData(),
+                                    "base_url": self.fields["base_url"].text().strip()})
+        if origin != self._key_origin:
+            self.fields["api_key"].clear()
+            self._key_origin = origin
+            self._show_status("Service address changed. Enter the key for this service.")
 
     def _paid_changed(self):
         if self.paid_enabled.isChecked() and self.height() < 680:
@@ -402,6 +421,7 @@ class SettingsDialog(QDialog):
     def _update_controls(self):
         openrouter = self.provider.currentData() == "openrouter"
         busy = self.worker is not None
+        self.tabs.setEnabled(not self._saving)
         paid = self.paid_enabled.isChecked()
         self.primary_form.setRowVisible(self.fields["base_url"], not openrouter)
         self.primary_form.setRowVisible(self.fields["free_providers"], openrouter)
@@ -528,6 +548,10 @@ class SettingsDialog(QDialog):
                 result[key] = widget.value() if isinstance(widget, QDoubleSpinBox) else widget.text().strip()
         if result["provider"] == "openrouter":
             result["base_url"] = BASE_URL
+        result["_unavailable_credentials"] = tuple(
+            key for key in self._config.get("_unavailable_credentials", ())
+            if key not in self._edited_secrets and result.get(key, "") == self._config.get(key, "") and
+            credential_origin(result, key) == credential_origin(self._config, key))
         return result
 
     def _start_operation(self, operation, handler, error_handler):
@@ -543,12 +567,12 @@ class SettingsDialog(QDialog):
         self._update_controls()
 
     def _receive_result(self, result):
-        if not self._closing:
+        if not self._closing or self._saving:
             self._operation_handler(result)
 
     def _receive_error(self, message):
-        if not self._closing:
-            self._error_handler(message)
+        if not self._closing or self._saving:
+            self._error_handler("Could not save credentials. Original settings were retained; unlock Keychain and retry." if self._saving else message)
 
     def _show_status(self, text):
         self.test_status.setText(text)
@@ -557,6 +581,7 @@ class SettingsDialog(QDialog):
     def _test_model_connection(self):
         if self.worker is not None:
             return
+        self._custom_origin_changed()
         config = self.values()
         self._show_status("Testing connection…")
         self._start_operation(lambda worker: make_client(config).test_connection(worker.isInterruptionRequested),
@@ -568,6 +593,15 @@ class SettingsDialog(QDialog):
         worker, self.worker = self.worker, None
         worker.deleteLater()
         self._update_controls()
+        if self._saving:
+            self._saving = False
+            self._update_controls()
+            if self.saved_result is not None:
+                self._disposed = True
+                super().accept()
+            else:
+                self._closing = False
+            return
         if self._closing:
             self._disposed = True
             super().reject()
@@ -578,17 +612,31 @@ class SettingsDialog(QDialog):
             QTimer.singleShot(0, lambda: self._load_catalog(paid))
 
     def accept(self):
-        if self.worker is None:
+        if self.worker is None and not self._disposed:
+            self._custom_origin_changed()
+            config = {**self._config, **self.values()}
+            if self.settings_store is not None:
+                changed = self._edited_secrets | {key for key in SECRET_FIELDS if config.get(key, "") != self._config.get(key, "")}
+                self._saving = True
+                self._show_status("Saving credentials securely…")
+                self._start_operation(lambda worker: self.settings_store.save(config, changed_secrets=changed),
+                                      self._settings_saved, self._show_status)
+                return
+            self.saved_result = SettingsResult(config)
             self._disposed = True
             super().accept()
+
+    def _settings_saved(self, result):
+        self.saved_result = result
 
     def reject(self):
         self._closing = True
         self._pending_catalog.clear()
         self._pending_storage = False
         if self.worker is not None:
-            self.worker.requestInterruption()
-            self._show_status("Stopping…")
+            if not self._saving:
+                self.worker.requestInterruption()
+            self._show_status("Finishing settings save…" if self._saving else "Stopping…")
             return
         self._disposed = True
         super().reject()
