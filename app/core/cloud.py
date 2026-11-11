@@ -195,6 +195,7 @@ class CloudClient:
         self.reasoning_options = {}
         self.account_quota = None
         self._last_dispatched = 0.0
+        self.document_context = ''
         self.model = config.model
         self.base_url = config.base_url.rstrip("/")
         self._validate()
@@ -289,6 +290,9 @@ class CloudClient:
     def prompt_hash(self):
         return hashlib.sha256(render_prompt("segment_system", language="English").encode()).hexdigest()
 
+    def set_document_context(self, context):
+        self.document_context = context[:8500]
+
     def generate_segment(self, pages, language="zh", cancel_callback=None, *, probe=False):
         if cancel_callback and cancel_callback():
             raise RequestCancelled("Cancelled before sending a request")
@@ -298,6 +302,8 @@ class CloudClient:
             "Return a JSON object with a notes array, one entry per page: "
             '{"notes":[{"page":1,"markdown":"## Topic\\nDetailed notes..."}]}. '
             "Use the original page numbers exactly. A genuinely empty page still needs an entry explaining it.") }]
+        if self.document_context and not probe:
+            parts.append({'type':'text', 'text':self.document_context})
         for page in pages:
             parts.append({"type": "text", "text": f"Source page {page.page_num}\nExtracted text:\n{page.text}"})
             data = base64.b64encode(Path(page.screenshot_path).read_bytes()).decode()

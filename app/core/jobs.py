@@ -8,6 +8,7 @@ from pathlib import Path
 
 from app.core.cloud import CloudError, RequestCancelled
 from app.core.generator.markdown import render_source_pages
+from app.core.note_structure import assemble_notes, navigation_context, source_outline
 from app.core.pipeline import PipelineCancelled, PipelineResult
 from app.core.task_store import BudgetExceeded, TaskStore
 from app.utils.helpers import ensure_output_dir, normalize_page_id, validate_file_type
@@ -38,18 +39,21 @@ class DocumentJob:
 
     def run(self, input_path, output_dir, output_format, language, progress_callback,
             stream_callback, cancel_callback, notion_client, notion_page_id, notion_mode,
-            task_id, state_callback, allow_paid, action, include_source_pages=None):
+            task_id, state_callback, allow_paid, action, include_source_pages=None, revision_markdown=None):
         self.progress, self.stream, self.cancel = progress_callback, stream_callback, cancel_callback
         self.state_callback = state_callback
         if output_format not in {"md", "ipynb"} or language not in {"zh", "en"}:
             raise ValueError("Unsupported output format or language")
-        if action not in {"generate", "export", "publish"}:
+        if action not in {"generate", "export", "publish", "revise"}:
             raise ValueError("Unknown task action")
         if action != "generate":
             self.task_id = task_id
             task = self.store.get(task_id)
             if task["status"] == "running":
                 raise ValueError("Wait for the running task before exporting or publishing")
+            if action == "revise":
+                self.store.save_revision(task_id, revision_markdown)
+                return self._result()
             self.include_source_pages = bool(task["options"].get("include_source_pages", False)
                                              if include_source_pages is None else include_source_pages)
             self.store.update(task_id, options={**task["options"], "include_source_pages": self.include_source_pages})
@@ -105,6 +109,7 @@ class DocumentJob:
             if not pages:
                 raise ValueError("The document has no readable pages")
             self.store.update(self.task_id, page_count=len(pages))
+            outline = source_outline(pages)
             cached = self._notes()
             if cached:
                 self._emit(f"Reusing {len(cached)} cached pages")
@@ -132,6 +137,9 @@ class DocumentJob:
                 self._check_cancel()
                 segment = pending.pop(0)
                 numbers = [p.page_num for p in segment]
+                if hasattr(client, 'set_document_context'):
+                    prior = '\n\n'.join(text for page, text in sorted(self._notes().items()) if page < numbers[0])
+                    client.set_document_context(navigation_context(outline, prior))
                 self._emit(f"Reading source pages {numbers[0]}–{numbers[-1]}…")
                 try:
                     response = self._request(client, segment, language)
@@ -259,28 +267,25 @@ class DocumentJob:
     def _markdown(self):
         task = self.store.get(self.task_id)
         notes = self._notes()
-        missing = sorted(set(range(1, task["page_count"] + 1)) - notes.keys())
-        parts = [f"# {task['options']['title']}"]
-        if missing:
-            label = "未完成笔记；缺失来源页" if task["options"]["language"] == "zh" else "Incomplete notes; missing source pages"
-            parts.append(f"> {label}: {', '.join(map(str, missing))}")
-        for page, content in sorted(notes.items()):
-            parts.append(self.pipeline.md_generator.sanitize_fragment(content) + f"\n\n> Source: page {page}")
-        return self.pipeline.md_generator.audit_document("\n\n".join(parts), task["options"]["title"]).content
+        return assemble_notes(task['options']['title'], notes, task['page_count'], task['options']['language'])
 
     def _export(self, output_dir, output_format):
         task = self.store.get(self.task_id)
-        if not self._notes():
+        revision = self.store.latest_revision(self.task_id)
+        if not revision and not self._notes():
             if task['status'] == 'completed':
                 raise ValueError("These cached notes have expired. Open the exported file, or generate the document again.")
             raise ValueError("No completed pages are available to export yet")
-        markdown = self._markdown()
+        markdown = revision['markdown'] if revision else self._markdown()
         options = task["options"]
         source = options["input_path"]
-        if len(self._notes()) < task["page_count"]:
+        if not revision and len(self._notes()) < task["page_count"]:
             source = str(Path(source).with_stem(Path(source).stem + "_partial"))
         output = self.pipeline._save_output(render_source_pages(markdown, self.include_source_pages), source, output_dir, output_format, options["title"])
-        self.store.update(self.task_id, markdown=markdown, output_path=output)
+        options = {**options, 'output_dir':str(Path(output_dir).expanduser().resolve()), 'output_format':output_format,
+                   'exported_revision_id':revision['id'] if revision else 0}
+        self.store.update(self.task_id, output_path=output, options=options,
+                          **({} if revision else {'markdown':markdown}))
         return self._result()
 
     def _publish(self, client, page_id, mode):
@@ -291,7 +296,8 @@ class DocumentJob:
             self.store.update(self.task_id, reason="notion_setup")
             return self._result()
         options = task["options"]
-        canonical = task["markdown"]
+        revision = self.store.latest_revision(self.task_id)
+        canonical = revision['markdown'] if revision else task["markdown"]
         if not canonical:
             if not self._notes():
                 raise ValueError("These cached notes have expired. Open the exported file, or generate the document again.")
@@ -313,6 +319,7 @@ class DocumentJob:
             pass
         signatures = {hashlib.sha256(f"{mode}:{target}:{markdown}".encode()).hexdigest() for target in targets}
         if options.get("published_signature") in signatures:
+            self.store.update(self.task_id, options={**options, 'published_revision_id':revision['id'] if revision else 0})
             return self._result()
         page_id = normalized
         signature = hashlib.sha256(f"{mode}:{page_id}:{markdown}".encode()).hexdigest()
@@ -325,6 +332,7 @@ class DocumentJob:
             else:
                 result = client.append_to_page(page_id, markdown)
             options.update(published_signature=signature, publication_state="published",
+                           published_revision_id=revision['id'] if revision else 0,
                            notion_result={"page_id": result.page_id, "url": result.url, "mode": result.mode})
             self.store.update(self.task_id, options=options, reason="")
         except (PipelineCancelled, RequestCancelled):
@@ -338,11 +346,15 @@ class DocumentJob:
         from app.core.notion import NotionPublishResult
         task = self.store.get(self.task_id)
         notion = task["options"].get("notion_result")
+        revision = self.store.latest_revision(self.task_id)
         result = PipelineResult(task["output_path"], task["options"]["title"], task["page_count"], 0, 1,
                                 notion=NotionPublishResult(**notion) if notion else None,
                                 task_id=self.task_id, status=task["status"], completed_pages=sorted(self._notes()),
                                 cost_usd=self.store.cost(self.task_id), reason=task["reason"],
-                                retry_at=task["retry_at"], paid_eligible=bool(task["paid_eligible"]))
+                                retry_at=task["retry_at"], paid_eligible=bool(task["paid_eligible"]),
+                                revision_id=revision['id'] if revision else 0,
+                                exported_revision_id=task['options'].get('exported_revision_id',0),
+                                published_revision_id=task['options'].get('published_revision_id',0))
         quota = getattr(self.pipeline.vision_client, "account_quota", None)
         result.free_requests_remaining = quota.remaining_requests if quota else None
         result.segment_pages = task["options"].get("segment_pages", self.SEGMENT_PAGES)

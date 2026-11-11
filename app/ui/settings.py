@@ -265,7 +265,7 @@ class SettingsDialog(QDialog):
         self.storage_status = self._label("")
         cache_layout.addWidget(self.storage_status)
         storage_layout.addWidget(storage_card)
-        storage_layout.addWidget(self._label("Exported Markdown and Notebook files, Notion pages and billing history are kept. Old temporary rendering files are removed only after their owning process has exited."))
+        storage_layout.addWidget(self._label("Saved human revisions, their source-page notes, exported files, Notion pages and billing history are kept. Old temporary rendering files are removed only after their owning process has exited."))
         storage_layout.addStretch()
         self.tabs.addTab(self.storage_tab, "Storage")
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)

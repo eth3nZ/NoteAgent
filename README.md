@@ -11,7 +11,7 @@ NoteAgent is a small Python desktop app built with PyQt6. Models run through a c
 You need **Python 3.10 or newer**, an internet connection for generation, and a model-service API key. The commands below are for macOS/Linux; macOS is the current desktop validation target.
 
 ```bash
-git clone https://github.com/eth3nZ/NoteAgent.git NoteAgent
+git clone --branch feat/note-review-workflow https://github.com/eth3nZ/NoteAgent.git NoteAgent
 cd NoteAgent
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
@@ -25,6 +25,8 @@ Already have the project? Open a terminal in its folder and start with the `pyth
 ```
 
 On macOS, you can also double-click `setup.command` once, then `run.command` whenever you want to launch. LibreOffice is optional: when installed, it improves PowerPoint rendering.
+
+This development version lives on `feat/note-review-workflow`. The earlier backup branch is preserved; the default `main` branch still contains the initial version.
 
 ## 2. Connect OpenRouter
 
@@ -52,6 +54,8 @@ The current default free candidate is `nvidia/nemotron-3.5-super-vl:free`. The a
 
 The app sends extracted text and page images to your selected model in groups of up to eight pages. It preserves accepted groups immediately. If a response is truncated or incomplete, it retries with smaller groups; a persistent single-page failure pauses the task.
 
+Each group receives a bounded local outline and previously accepted topic names to keep organization consistent. Export joins adjacent identical topic headings while retaining the original page records. This adds no extra model request or full-document rewrite. Prompt changes invalidate generation caches for new tasks; existing notes and exports remain available.
+
 The language control applies to new generation. Re-exporting saved notes changes their format or source references; it does not translate them.
 
 ### Read the estimate
@@ -78,9 +82,21 @@ For example, **36 pages ≈ 5 requests** means five groups of up to eight pages.
 | **Open notes** | Open the saved file. No generation, new export or Notion write. |
 | **Export again** | Save accepted notes in the selected format and folder, without model requests. |
 | **Export notes** | Recreate a missing output file from the cached notes. |
+| **Export revision** | Save the latest human revision to a new local file. |
 | **Export available pages** | Save a partial result with an explicit list of missing pages. |
 
 Selecting a new file, language or generation model returns the main button to **Create notes**. Changing the output format, source-reference option, API key or paid-backup settings does not invalidate accepted content. Reusing cached pages also requires matching document contents, prompts and rendering settings.
+
+## Review and correct your notes
+
+After a task completes:
+
+1. Use **Preview** for rendered headings, tables and code, or **Markdown** for the original text. This uses native Qt; formulas remain in LaTeX in the app and render in Notebook/Notion exports.
+2. Select **Review sources** to view an original PDF page or PowerPoint slide alongside its generated note. Rendering runs locally in the background. If the document moved, use **Locate source**; its contents must match the original document.
+3. Select **Edit notes**, make changes in Markdown, and choose **Save revision**. Preview is also available inside the editor. Closing an unsaved edit offers Save, Discard or Cancel.
+4. Select **Export revision** to save the corrected `.md` or `.ipynb`, or explicitly send it to Notion. Saving a revision itself sends no model or Notion request.
+
+Revisions are stored separately from generated page notes. Re-exporting and publishing use the latest saved revision; cached model results, previous revisions and billing records remain intact. Source-page references describe the generated notes; edited passages are not automatically remapped to source pages. A revision belongs to its saved task and is restored when that task is reopened.
 
 ## Optional: publish to Notion
 
@@ -94,6 +110,8 @@ Generation saves the local file first, then publishes. For completed notes not y
 
 Notion receives text, native formulas, tables and code blocks. Original page images are not uploaded to Notion, and notebooks are not executed there. You can also import the generated Markdown manually.
 
+If notes were already published, **Send revision** requires confirmation: append adds a revised copy, and create-child makes a new page. It does not overwrite the existing Notion content. Successfully publishing the same revision again is skipped.
+
 ## Free quota and optional paid backup
 
 If the free daily quota is exhausted, the app saves completed pages and schedules a retry for **00:05 UTC the following day**. The status shows that time in your local timezone. Retry happens while the app is open or after it is next launched; no background service is installed.
@@ -106,7 +124,7 @@ To prepare a paid fallback, enable **Settings → Models → Use a paid backup**
 - Before each paid request, the app reserves a conservative maximum based on the model context and configured price ceilings. A request can be blocked by its budget even when the rough estimate looks affordable.
 - Reported charges replace reservations. An uncertain outcome pauses further requests until the charge is checked against provider activity and reconciled.
 
-Budgets cover requests recorded by this app, including earlier tasks for the same document. They do not cover other apps using your key. See the known reconciliation-UI limitation below before relying on the paid workflow.
+Budgets cover requests recorded by this app, including earlier tasks for the same document. They do not cover other apps using your key. After the last uncertain charge for a document is reconciled, its saved pause reason is cleared and the main action returns to **Resume**.
 
 ## Custom endpoint: when to use it
 
@@ -138,6 +156,7 @@ The app performs cache cleanup in the background at startup. To check sizes or c
 
 - Completed cache unused for 30 days can expire when a saved local export still exists.
 - The latest/current task, unfinished tasks, pending Notion retries and uncertain paid requests are retained. A cache with no saved export is kept as a potential only copy.
+- Human revisions and their generated source-page records are retained; cache cleanup does not remove them.
 - Repeated identical document bodies can be compacted while retaining reconstructable page segments.
 - Old, marked rendering workspaces are removed only after their owner process has exited; normal completion/cancellation removes its workspace directly.
 - Cleanup keeps source files, exported notes, remote Notion pages and fee records. Regenerating expired content may consume model requests again.
@@ -158,15 +177,16 @@ Historical `acceptance-*` and `ui-review` folders are development records, not a
 
 ## Verification and current limitations
 
-The current checkpoint passes **124 automated tests**. These use local documents and mock HTTP responses; they do not spend API credits. They cover routing, response validation, truncation, caching, recovery, budgets, Notion export and UI responsiveness.
+The automated suite uses local documents and mock HTTP responses; it does not spend API credits. It covers routing, response validation, truncation, caching, recovery, budgets, source review, persistent revisions, independent export/publishing and UI responsiveness. Code checks include numeric-only Python lines, literal strings, blank lines and alternate Markdown fences.
 
 A recorded live test on **2026-11-08** completed a 38-page PDF with the default free candidate: six inference attempts including a connection probe, about 160 seconds, $0 reported cost, and no new inference on its cached rerun. A separate Notion append/readback check covered that output. These results describe those runs, not guaranteed availability or accuracy for other documents.
 
+On **2026-11-10**, a four-page English sample was tested with the updated prompt. Across an initial run and one follow-up, three free inference requests were made, including one connection probe, with $0 reported cost and no inference during cache reruns. The follow-up retained the worked-example values, produced LaTeX formulas, joined the continuing topic and described the scanned network correctly. It still omitted two visible blank lines inside a multiline string. This is a partial fidelity pass, not a claim of lossless transcription. No paid requests or Notion writes were made.
+
 Known issues and remaining checks:
 
-- **Code fidelity:** the current cleanup can remove legitimate numeric-only lines inside Python blocks. Compare important transcribed code with the source.
-- **Paid reconciliation UI:** after the final uncertain charge is reconciled, the main action can remain **Reconcile charge** instead of returning to **Resume**. The ledger is updated, but the UI state still needs correction.
-- **Writing quality:** the revised prompt for connected explanations still needs a fresh live English comparison. Structural validation does not establish factual accuracy.
+- **Writing quality:** the English smoke test covers four pages in one group; coherence across a long document and multiple groups still needs live validation. Local heading merging only recognizes identical adjacent topics; it does not infer whether different titles mean the same thing. Structural validation does not establish factual accuracy.
+- **Code fidelity:** local formatting preserves numeric code lines, literal strings and blank lines. PDF text extraction can omit whitespace, and the model did not recover visible blank-line spacing from the images in the English sample. Ambiguous editor gutter prefixes are retained rather than guessed away. Review important code against the source before running it yourself.
 - **Acceptance coverage:** custom endpoints, real paid requests, use from multiple regions, and a visually complex PPTX still need separate end-to-end checks.
 - **PowerPoint fidelity:** without LibreOffice, SmartArt, charts, grouped shapes and unusual fonts may render imperfectly.
 
@@ -179,6 +199,14 @@ Run the offline unit suite:
 ```bash
 .venv/bin/python -m unittest discover -s tests -v
 ```
+
+Build fixed English material and run offline fidelity checks:
+
+```bash
+.venv/bin/python scripts/quality_baseline.py
+```
+
+The versioned PDF includes a definition, a continuing worked example, code with numeric literals and blank lines, and an image-only network diagram. `dev_artifacts/english-quality/review.json` records mechanical checks and a manual checklist for future live runs. Its responses are fixed fixtures: **model quality is not assessed**. The script reads no API keys and makes no network requests.
 
 Run a document acceptance check with mock model responses:
 

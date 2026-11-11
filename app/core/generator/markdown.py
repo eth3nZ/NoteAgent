@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import List
 
 from app.core.vision.vision_client import PageAnalysis
+from app.core.markdown_text import OPEN_FENCE, map_prose, markdown_blocks, prose_text
 
 
 def render_source_pages(content: str, include_source_pages: bool = False) -> str:
@@ -88,84 +89,45 @@ class MarkdownGenerator:
         return self.audit_document(content, title).content
 
     def sanitize_fragment(self, content: str) -> str:
-        """Remove model wrappers and presentation/IDE noise from one page."""
+        """Clean prose and incidental console chrome, preserving source code verbatim."""
         content = self._strip_markdown_wrappers(content.strip())
-        content = re.sub(
-            r"(?im)^[ \t]*<a[ \t]+[^>]*id=['\"]?page-\d+['\"]?[^>]*>[ \t]*</a>[ \t]*$",
-            "",
-            content,
-        )
-        content = re.sub(
-            r"(?im)^[ \t]*#{1,6}[ \t]+(?:page|slide|第)[ \t]*\d+(?:[ \t]*[页:]?[^\n]*)?$",
-            "",
-            content,
-        )
+        blocks = []
+        for fenced, block in markdown_blocks(content):
+            if not fenced:
+                blocks.append(self._sanitize_prose(block))
+                continue
+            language = OPEN_FENCE.match(block)[2].strip().lower()
+            if language in {"text", "console", "terminal"}:
+                block = "".join(line for line in block.splitlines(keepends=True) if not self._is_noise_line(line))
+            blocks.append(block)
+        return "".join(blocks).strip()
 
-        lines: List[str] = []
-        in_fence = False
-        fence_language = ""
-        skip_metadata = False
-        skip_page_toc = False
-        for line in content.splitlines():
-            fence_match = re.match(r"^\s*```([^\s`]*)", line)
-            if fence_match:
-                if not in_fence:
-                    in_fence = True
-                    fence_language = fence_match.group(1).lower()
+    def _sanitize_prose(self, content):
+        content = re.sub(r"(?im)^[ \t]*<a[ \t]+[^>]*id=['\"]?page-\d+['\"]?[^>]*>[ \t]*</a>[ \t]*$", "", content)
+        content = re.sub(r"(?im)^[ \t]*#{1,6}[ \t]+(?:page|slide|第)[ \t]*\d+(?:[ \t]*[页:]?[^\n]*)?$", "", content)
+        lines, skip_metadata, skip_page_toc = [], False, False
+        for line in content.splitlines(keepends=True):
+            if re.match(r"^\s{0,3}#{1,6}\s+(?:Table of Contents|目录)\s*$", line, re.I):
+                skip_page_toc = True
+                continue
+            if skip_page_toc:
+                if not line.strip() or re.match(r"^\s*-\s+\[[^\]]+\]\(#page-\d+\)\s*$", line, re.I):
+                    continue
+                skip_page_toc = False
+            if re.match(r"^\s{0,3}#{1,6}\s+(?:IDE Context|Interface Elements|Status Bar|Footer)\b", line, re.I):
+                skip_metadata = True
+                continue
+            if skip_metadata:
+                if re.match(r"^\s{0,3}#{1,6}\s+\S", line) or line.strip() in {"---", "***"}:
                     skip_metadata = False
                 else:
-                    in_fence = False
-                    fence_language = ""
-                lines.append(line.rstrip())
+                    continue
+            if self._is_noise_line(line):
                 continue
-
-            if not in_fence:
-                if re.match(
-                    r"^\s{0,3}#{1,6}\s+(?:Table of Contents|目录)\s*$",
-                    line,
-                    re.IGNORECASE,
-                ):
-                    skip_page_toc = True
-                    continue
-                if skip_page_toc:
-                    if re.match(r"^\s*-\s+\[[^\]]+\]\(#page-\d+\)\s*$", line, re.IGNORECASE):
-                        continue
-                    if not line.strip():
-                        continue
-                    skip_page_toc = False
-                if re.match(
-                    r"^\s{0,3}#{1,6}\s+(?:IDE Context|Interface Elements|Status Bar|Footer)\b",
-                    line,
-                    re.IGNORECASE,
-                ):
-                    skip_metadata = True
-                    continue
-                if skip_metadata:
-                    if re.match(r"^\s{0,3}#{1,6}\s+\S", line):
-                        skip_metadata = False
-                    elif line.strip() in {"---", "***"}:
-                        skip_metadata = False
-                        lines.append(line.rstrip())
-                        continue
-                    else:
-                        continue
-                if self._is_noise_line(line):
-                    continue
-                if re.match(r"^\s*(?:\*{0,2}(?:page|slide)\s*)?\d{1,3}\*{0,2}\s*$", line, re.IGNORECASE):
-                    continue
-            elif fence_language in {"python", "py", "python3", "ipython"}:
-                if re.match(r"^\s*\d{1,4}\s*$", line):
-                    continue
-                line = re.sub(r"^(\s*)\d{1,4}\s{2}(?=\s*[A-Za-z_#@])", r"\1", line)
-            elif fence_language in {"text", "console", "terminal", "shell", "bash"}:
-                if self._is_noise_line(line):
-                    continue
-
-            lines.append(line.rstrip())
-
-        cleaned = "\n".join(lines)
-        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
-        return cleaned.strip()
+            if re.match(r"^\s*\*{0,2}(?:page|slide)\s*\d{1,3}\*{0,2}\s*$", line, re.I):
+                continue
+            lines.append(line)
+        return re.sub(r"\n{3,}", "\n\n", "".join(lines))
 
     def audit_document(self, content: str, title: str) -> MarkdownAuditResult:
         """Apply safe fixes, then report any unresolved format defects."""
@@ -179,19 +141,18 @@ class MarkdownGenerator:
         corrections.extend(fence_corrections)
         content, heading_corrections = self._normalize_headings(content, title)
         corrections.extend(heading_corrections)
-        content = re.sub(r"\n(?:\s*---\s*\n){2,}", "\n\n---\n", content)
-        content = re.sub(r"\n{3,}", "\n\n", content).strip() + "\n"
+        content = map_prose(content, lambda text: re.sub(r"\n(?:\s*---\s*\n){2,}", "\n\n---\n", text))
+        content = map_prose(content, lambda text: re.sub(r"\n{3,}", "\n\n", text)).strip() + "\n"
 
         issues: List[str] = []
-        if re.search(r"<a\s+[^>]*id=", content, re.IGNORECASE):
+        prose = prose_text(content)
+        if re.search(r"<a\s+[^>]*id=", prose, re.IGNORECASE):
             issues.append("HTML anchors remain")
-        if content.count("```") % 2:
-            issues.append("Unbalanced fenced code block")
         if self._has_unlabeled_opening_fence(content):
             issues.append("A fenced block has no language")
-        if re.search(r"(?im)^#{1,6}\s+(?:page|slide|第)\s*\d+", content):
+        if re.search(r"(?im)^#{1,6}\s+(?:page|slide|第)\s*\d+", prose):
             issues.append("Page-number headings remain")
-        if any(self._is_noise_line(line) for line in content.splitlines()):
+        if any(self._is_noise_line(line) for line in prose.splitlines()):
             issues.append("Terminal or IDE noise remains")
         if self._count_document_titles(content) != 1:
             issues.append("Document must contain exactly one level-one title")
@@ -202,103 +163,67 @@ class MarkdownGenerator:
             issues=issues,
         )
 
-    def _strip_outer_markdown_fence(self, content: str) -> str:
-        lines = content.splitlines()
-        if (
-            len(lines) >= 2
-            and re.match(r"^\s*```(?:markdown|md)\s*$", lines[0], re.IGNORECASE)
-            and re.match(r"^\s*```\s*$", lines[-1])
-        ):
-            return "\n".join(lines[1:-1]).strip()
-        return content
-
     def _strip_markdown_wrappers(self, content: str) -> str:
-        """Remove one or more model-added outer Markdown fences."""
-        lines = content.splitlines()
-        if not any(
-            re.match(r"^\s*```(?:markdown|md)\s*$", line, re.IGNORECASE)
-            for line in lines
-        ):
-            return self._strip_outer_markdown_fence(content)
-
-        remove = set()
-        index = 0
-        while index < len(lines):
-            if not re.match(
-                r"^\s*```(?:markdown|md)\s*$", lines[index], re.IGNORECASE
-            ):
-                index += 1
+        """Unwrap model Markdown fences without inspecting nested source-code bodies."""
+        result, code_fence, wrapper = [], None, False
+        for line in content.splitlines(keepends=True):
+            match = OPEN_FENCE.match(line)
+            if code_fence:
+                result.append(line)
+                if (match and match[1][0] == code_fence[0] and len(match[1]) >= len(code_fence)
+                        and not match[2].strip()):
+                    code_fence = None
                 continue
-            remove.add(index)
-            nested_fences = 0
-            cursor = index + 1
-            while cursor < len(lines):
-                match = re.match(r"^\s*```([^\s`]*)\s*$", lines[cursor])
-                if not match:
-                    cursor += 1
+            if match:
+                if match[2].strip().lower() in {'markdown', 'md'}:
+                    wrapper = True
                     continue
-                language = match.group(1).lower()
-                if language:
-                    nested_fences += 1
-                elif nested_fences:
-                    nested_fences -= 1
-                else:
-                    remove.add(cursor)
-                    break
-                cursor += 1
-            index = cursor + 1
-        return "\n".join(
-            line for index, line in enumerate(lines) if index not in remove
-        ).strip()
+                if wrapper and not match[2].strip():
+                    wrapper = False
+                    continue
+                code_fence = match[1]
+            result.append(line)
+        return ''.join(result).strip()
 
     def _normalize_fenced_blocks(self, content: str) -> tuple[str, List[str]]:
-        corrections: List[str] = []
-        lines = content.splitlines()
-        normalized: List[str] = []
-        in_fence = False
-        for index, line in enumerate(lines):
-            match = re.match(r"^(\s*)```([^\s`]*)\s*$", line)
-            if not match:
-                normalized.append(line)
+        corrections, normalized = [], []
+        for fenced, block in markdown_blocks(content):
+            if not fenced:
+                normalized.append(block)
                 continue
-            if not in_fence:
-                language = match.group(2).lower()
-                if not language:
-                    preview = "\n".join(lines[index + 1:index + 12])
-                    language = self._infer_fence_language(preview)
-                    corrections.append(f"Labeled an unlabeled block as {language}")
-                elif language in {"console", "terminal", "shell"}:
-                    language = "text"
-                    corrections.append("Normalized terminal block language to text")
-                normalized.append(f"```{language}")
-                in_fence = True
-            else:
-                normalized.append("```")
-                in_fence = False
-        if in_fence:
-            normalized.append("```")
-            corrections.append("Closed an unterminated fenced block")
-        return "\n".join(normalized), corrections
+            lines = block.splitlines(keepends=True)
+            match = OPEN_FENCE.match(lines[0])
+            marker, language = match[1], match[2].strip()
+            if not language:
+                language = self._infer_fence_language("".join(lines[1:12]))
+                corrections.append(f"Labeled an unlabeled block as {language}")
+            elif language.lower() in {"console", "terminal", "shell"}:
+                language = "text"
+                corrections.append("Normalized terminal block language to text")
+            lines[0] = marker + language + "\n"
+            closing = OPEN_FENCE.match(lines[-1]) if len(lines) > 1 else None
+            if not (closing and closing[1][0] == marker[0] and len(closing[1]) >= len(marker) and not closing[2].strip()):
+                lines.append(("" if lines[-1].endswith("\n") else "\n") + marker + "\n")
+                corrections.append("Closed an unterminated fenced block")
+            normalized.append("".join(lines))
+        return "".join(normalized), corrections
 
     def _normalize_headings(self, content: str, title: str) -> tuple[str, List[str]]:
-        corrections: List[str] = []
-        lines = content.splitlines()
-        h1_indices: List[int] = []
-        in_fence = False
-        for index, line in enumerate(lines):
-            if re.match(r"^\s*```", line):
-                in_fence = not in_fence
-                continue
-            if not in_fence and re.match(r"^#\s+\S", line):
-                h1_indices.append(index)
-        if not h1_indices:
-            lines = [f"# {title}", ""] + lines
+        corrections, seen = [], 0
+        def normalize(text):
+            nonlocal seen
+            def heading(match):
+                nonlocal seen
+                seen += 1
+                return match[0] if seen == 1 else "#" + match[0]
+            return re.sub(r"(?m)^# +\S[^\n]*", heading, text)
+        content = map_prose(content, normalize)
+        if not seen:
+            content = f"# {title}\n\n" + content
             corrections.append("Added the document title")
-        elif len(h1_indices) > 1:
-            for index in h1_indices[1:]:
-                lines[index] = "#" + lines[index]
+        elif seen > 1:
             corrections.append("Demoted duplicate level-one headings")
-        return "\n".join(lines), corrections
+        return content, corrections
 
     def _infer_fence_language(self, content: str) -> str:
         if re.search(
@@ -310,26 +235,11 @@ class MarkdownGenerator:
         return "text"
 
     def _has_unlabeled_opening_fence(self, content: str) -> bool:
-        in_fence = False
-        for line in content.splitlines():
-            match = re.match(r"^\s*```([^\s`]*)\s*$", line)
-            if not match:
-                continue
-            if not in_fence and not match.group(1):
-                return True
-            in_fence = not in_fence
-        return False
+        return any(not OPEN_FENCE.match(block)[2].strip()
+                   for fenced, block in markdown_blocks(content) if fenced)
 
     def _count_document_titles(self, content: str) -> int:
-        count = 0
-        in_fence = False
-        for line in content.splitlines():
-            if re.match(r"^\s*```", line):
-                in_fence = not in_fence
-                continue
-            if not in_fence and re.match(r"^#\s+\S", line):
-                count += 1
-        return count
+        return len(re.findall(r"(?m)^# +\S", prose_text(content)))
 
     def _is_noise_line(self, line: str) -> bool:
         stripped = line.strip()

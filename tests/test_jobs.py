@@ -97,6 +97,17 @@ class JobTests(unittest.TestCase):
         self.assertEqual(second.status, "completed")
         self.assertEqual(self.client.calls, [list(range(1, 9)), list(range(9, 17)), [17]])
 
+    def test_cross_segment_navigation_reuses_only_previously_accepted_topic_names(self):
+        contexts = []
+        self.client.set_document_context = contexts.append
+        result = self.run_job()
+        self.assertEqual(result.status, 'completed')
+        self.assertEqual(len(contexts), 3)
+        self.assertIn('Page 17:', contexts[0])
+        self.assertIn('Topic 1', contexts[1])
+        self.assertNotIn('Topic 9', contexts[1])
+        self.assertIn('Topic 16', contexts[2])
+
     def test_source_pages_are_export_only_and_do_not_invalidate_cached_notes(self):
         first = self.run_job()
         hidden = Path(first.output_path).read_text()

@@ -19,6 +19,7 @@ from app.core.pipeline import PipelineResult
 from app.core.preflight import DocumentSummary, build_estimate
 from app.core.cloud import AccountQuota, CatalogModel
 from app.core.task_store import TaskStore
+from app.core.notion import NotionPublishResult
 from app.ui.main_window import MainWindow
 from app.ui.branding import application_icon, menu_bar_icon
 from app.ui.settings import SettingsDialog
@@ -229,6 +230,82 @@ class ResponsiveUITests(unittest.TestCase):
         self.assertEqual(completed, ["done"])
         self.assertTrue(self.window.generate_button.isEnabled())
         self.assertFalse(self.window.activity.indicator.active)
+
+    def test_reconciliation_refreshes_main_action_after_the_final_charge(self):
+        task = self.show_saved_task(status='paused', reason='uncertain_cost')
+        store = TaskStore(self.window.store_path)
+        task_id = store.create('fixture', 'document', task['options'])
+        request = store.reserve(task_id, 'test/paid', True, .04)
+        store.fail_request(request, uncertain=True)
+        store.update(task_id, status='paused', reason='uncertain_cost', page_count=2)
+        task.update(id=task_id)
+        with patch.object(self.window, '_schedule_estimate'):
+            self.window._restore_previous(task)
+        with patch('app.ui.main_window.QInputDialog.getDouble', return_value=(.001,True)):
+            self.window.generate_button.click()
+            self.spin(lambda:self.window.worker is None and not store.uncertain(task_id))
+        self.assertEqual(self.window.generate_button.text(), 'Resume')
+        self.assertEqual(self.window.last_result.reason, '')
+        self.assertAlmostEqual(self.window.last_result.cost_usd, .001)
+
+    def test_saved_revision_restores_and_exports_without_a_model_or_notion_write(self):
+        task = self.show_saved_task()
+        store = TaskStore(self.window.store_path)
+        task_id = store.create('fixture', 'document', task['options'])
+        store.update(task_id, status='completed', page_count=2, markdown=task['markdown'], output_path=task['output_path'])
+        markdown = '# Revised notes\n\nA manually corrected explanation.'
+        revision_id = store.save_revision(task_id, markdown)
+        task.update(id=task_id, revision=store.latest_revision(task_id))
+        with patch.object(self.window, '_schedule_estimate'):
+            self.window._restore_previous(task)
+        self.assertEqual(self.window.preview.toPlainText(), markdown)
+        self.assertEqual(self.window.rendered_preview.toPlainText().splitlines()[0], 'Revised notes')
+        self.assertEqual(self.window.generate_button.text(), 'Export revision')
+        Path(task['options']['input_path']).unlink()
+        self.window.publish_notion.setChecked(True)
+        with patch('app.ui.main_window.make_client') as model, \
+             patch('app.ui.main_window.NotionClient.append_to_page') as notion:
+            self.window.generate_button.click()
+            self.spin(lambda:self.window.worker is None)
+            model.assert_not_called()
+            notion.assert_not_called()
+        self.assertEqual(Path(self.window.last_result.output_path).read_text(), markdown)
+        self.assertEqual(self.window.last_result.exported_revision_id, revision_id)
+        self.assertEqual(self.window.generate_button.text(), 'Open notes')
+        self.window.input_file = self.window.last_result = None
+        self.window._load_previous()
+        self.spin(lambda:self.window.worker is None)
+        self.assertEqual(self.window.preview.toPlainText(), markdown)
+        self.assertEqual(self.window.last_result.revision_id, revision_id)
+        self.assertEqual(self.window.generate_button.text(), 'Open notes')
+
+    def test_publishing_a_revision_requires_an_explicit_new_copy_confirmation(self):
+        self.show_saved_task()
+        self.window.last_result.notion = NotionPublishResult('page', 'https://notion.so/page', 'append')
+        self.window.last_result.revision_id = 7
+        self.window.publish_notion.setChecked(True)
+        self.assertEqual(self.window.retry_notion_button.text(), 'Send revision')
+        with patch.object(self.window, '_saved_action') as saved:
+            with patch('app.ui.main_window.QMessageBox.question', return_value=QMessageBox.StandardButton.No):
+                self.window.retry_notion_button.click()
+            saved.assert_not_called()
+            with patch('app.ui.main_window.QMessageBox.question', return_value=QMessageBox.StandardButton.Yes):
+                self.window.retry_notion_button.click()
+            saved.assert_called_once_with('publish')
+
+    def test_rendered_preview_starts_at_top_and_does_not_pull_readers_to_the_end(self):
+        self.window._set_preview_markdown('\n\n'.join(f'## Topic {number}\n\nA paragraph.' for number in range(100)))
+        QTest.qWait(20)
+        scrollbar = self.window.rendered_preview.verticalScrollBar()
+        self.assertEqual(scrollbar.value(), 0)
+        self.assertGreater(scrollbar.maximum(), 0)
+        self.window._on_stream('\n\n## Next topic\n\nNew paragraph.')
+        self.window._flush_preview()
+        self.assertEqual(scrollbar.value(), 0)
+        scrollbar.setValue(scrollbar.maximum())
+        self.window._on_stream('\n\n## Last topic\n\nAnother paragraph.')
+        self.window._flush_preview()
+        self.assertEqual(scrollbar.value(), scrollbar.maximum())
 
     def test_activity_expands_without_blocking_and_preserves_plain_text(self):
         activity = self.window.activity

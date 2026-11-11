@@ -112,10 +112,11 @@ Process finished with exit code 0
         result = MarkdownGenerator().audit_document(content, "Lecture")
         self.assertNotIn("<a id=", result.content)
         self.assertNotIn("Page 8", result.content)
-        self.assertNotIn("45  ", result.content)
+        # Gutter-like prefixes are ambiguous inside code; preserve them for review.
+        self.assertIn("45  import numpy as np", result.content)
         self.assertNotIn("Process finished", result.content)
         self.assertNotIn("IDE Context", result.content)
-        self.assertIn("```python\nimport numpy", result.content)
+        self.assertIn("```python\n45  import numpy", result.content)
         self.assertIn("```text\n[1 2]", result.content)
         self.assertEqual(result.issues, [])
 

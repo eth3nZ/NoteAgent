@@ -43,6 +43,9 @@ class PipelineResult:
     paid_eligible: bool = False
     free_requests_remaining: Optional[int] = None
     segment_pages: int = 8
+    revision_id: int = 0
+    exported_revision_id: int = 0
+    published_revision_id: int = 0
 
 
 class Pipeline:
@@ -72,13 +75,13 @@ class Pipeline:
             language: str = "zh", progress_callback=None, stream_callback=None,
             cancel_callback=None, notion_client=None, notion_page_id="", notion_mode="none",
             task_id=None, state_callback=None, allow_paid=False, action="generate",
-            include_source_pages: Optional[bool] = None) -> PipelineResult:
-        if hasattr(self.vision_client, "generate_segment") or (self.store is not None and action != "generate"):
+            include_source_pages: Optional[bool] = None, revision_markdown: Optional[str] = None) -> PipelineResult:
+        if hasattr(self.vision_client, "generate_segment") or action != "generate":
             from app.core.jobs import DocumentJob
             return DocumentJob(self).run(
                 input_path, output_dir, output_format, language, progress_callback,
                 stream_callback, cancel_callback, notion_client, notion_page_id,
-                notion_mode, task_id, state_callback, allow_paid, action, include_source_pages)
+                notion_mode, task_id, state_callback, allow_paid, action, include_source_pages, revision_markdown)
         # Keep the old injected page/generator API working for existing integrations.
         return self._run_legacy(input_path, output_dir, output_format, language,
                                 progress_callback, stream_callback, cancel_callback,
@@ -305,9 +308,10 @@ class Pipeline:
             self.md_generator.save(markdown, output_path)
         else:
             body = markdown
-            first_line = f"# {title}\n"
-            if body.startswith(first_line):
-                body = body[len(first_line):].lstrip()
+            first_line, separator, remainder = body.partition('\n')
+            if first_line.startswith('# '):
+                title = first_line[2:].strip() or title
+                body = remainder.lstrip('\r\n')
             notebook = self.nb_generator.generate_from_markdown(body, title=title)
             self.nb_generator.save(notebook, output_path)
         return output_path

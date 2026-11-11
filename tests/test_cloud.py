@@ -48,6 +48,7 @@ class CloudTests(unittest.TestCase):
 
         client = CloudClient(ModelConfig(api_key="test", providers=("nvidia",)), httpx.MockTransport(handler))
         client.prepare()
+        client.set_document_context('Document navigation hints: Gradient Descent; previously accepted topic: Learning Rate.')
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "page.png"
             Image.new("RGB", (100, 100), "white").save(path)
@@ -59,6 +60,7 @@ class CloudTests(unittest.TestCase):
         self.assertEqual(seen[0]["provider"]["max_price"], {"prompt": 0, "completion": 0, "image": 0, "request": 0})
         self.assertEqual(seen[0]["provider"]["only"], ["nvidia"])
         self.assertTrue(any(part["type"] == "image_url" for part in seen[0]["messages"][1]["content"]))
+        self.assertTrue(any('previously accepted topic: Learning Rate' in part.get('text','') for part in seen[0]['messages'][1]['content']))
 
     def test_obviously_wrong_language_is_rejected_without_translating_source_code(self):
         english = "This page explains the important relationships between inputs weights and outputs. " * 7

@@ -52,7 +52,13 @@ class TaskStore:
                     reserved INTEGER NOT NULL, actual INTEGER,
                     state TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', created REAL NOT NULL
                 );
-                PRAGMA user_version=1;
+                CREATE TABLE IF NOT EXISTS revisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id TEXT NOT NULL REFERENCES tasks(id),
+                    markdown TEXT NOT NULL, created REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS revisions_by_task ON revisions(task_id,id);
+                PRAGMA user_version=2;
             """)
         self.path.chmod(0o600)
 
@@ -97,6 +103,7 @@ class TaskStore:
             segments.setdefault(row['cache_key'], []).append(row['notes'])
         uncertain_keys = {row[0] for row in db.execute("""SELECT DISTINCT t.cache_key FROM requests r
             JOIN tasks t ON t.id=r.task_id WHERE r.paid=1 AND r.state IN ('reserved','uncertain')""")}
+        revised_keys = {row[0] for row in db.execute("SELECT DISTINCT t.cache_key FROM revisions r JOIN tasks t ON t.id=r.task_id")}
         keep = {tasks[0]['cache_key']} if tasks else set()
         keep.update(task['cache_key'] for task in tasks if task['id'] == protect_task_id)
         cutoff = self.clock() - retention_days * 86400
@@ -110,7 +117,7 @@ class TaskStore:
                     pass
             return False
         for key, members in groups.items():
-            protected = key in uncertain_keys or any(
+            protected = key in uncertain_keys or key in revised_keys or any(
                 task['status'] != 'completed' or task['reason'] or
                 task['options'].get('publication_state') in {'sending','uncertain'} for task in members)
             if protected:
@@ -206,6 +213,27 @@ class TaskStore:
                        (task_id, cache_key, doc_hash, json.dumps(options), "ready", self.clock()))
         return task_id
 
+    def latest_revision(self, task_id):
+        with self._db() as db:
+            row = db.execute("SELECT * FROM revisions WHERE task_id=? ORDER BY id DESC LIMIT 1", (task_id,)).fetchone()
+            return dict(row) if row else None
+
+    def save_revision(self, task_id, markdown):
+        """Append a human edit without changing generated segments or publishing anything."""
+        if not isinstance(markdown, str) or not markdown.strip():
+            raise ValueError("A revision cannot be empty")
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            task = db.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if not task or task['status'] != 'completed':
+                raise ValueError("Complete the notes before saving a revision")
+            latest = db.execute("SELECT id,markdown FROM revisions WHERE task_id=? ORDER BY id DESC LIMIT 1", (task_id,)).fetchone()
+            if latest and latest['markdown'] == markdown:
+                return latest['id']
+            revision = db.execute("INSERT INTO revisions(task_id,markdown,created) VALUES(?,?,?)", (task_id, markdown, self.clock())).lastrowid
+            db.execute("UPDATE tasks SET updated=? WHERE id=?", (self.clock(), task_id))
+            return revision
+
     def update(self, task_id, **values):
         allowed = {"status", "reason", "retry_at", "quota_day", "paid_eligible", "page_count", "markdown", "output_path", "options"}
         if not values.keys() <= allowed:
@@ -287,4 +315,13 @@ class TaskStore:
         """Explicit user-entered amount after checking the provider's usage dashboard."""
         value = micros(actual_usd)
         with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("""SELECT t.doc_hash FROM requests r JOIN tasks t ON t.id=r.task_id
+                WHERE r.id=? AND r.state='uncertain'""", (request_id,)).fetchone()
+            if not row:
+                raise ValueError("This request no longer needs reconciliation")
             db.execute("UPDATE requests SET actual=?,state='confirmed',detail='manually reconciled' WHERE id=? AND state='uncertain'", (value, request_id))
+            pending = db.execute("""SELECT 1 FROM requests r JOIN tasks t ON t.id=r.task_id
+                WHERE t.doc_hash=? AND r.paid=1 AND r.state IN ('uncertain','reserved') LIMIT 1""", (row['doc_hash'],)).fetchone()
+            if not pending:
+                db.execute("UPDATE tasks SET reason='' WHERE doc_hash=? AND reason='uncertain_cost'", (row['doc_hash'],))
