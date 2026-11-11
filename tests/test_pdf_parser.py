@@ -29,6 +29,25 @@ class PDFParserTests(unittest.TestCase):
             parser.cleanup()
             self.assertFalse(Path(pages[0].screenshot_path).exists())
 
+    def test_cached_pages_keep_their_text_without_rendering_images(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'cached.pdf'
+            with pymupdf.open() as document:
+                for number in range(1,4):
+                    document.new_page().insert_text((40,60),f'Source page {number}')
+                document.save(path)
+            parser = PDFParser(str(path))
+            try:
+                pages = parser.parse(dpi=72, skip_pages={1,3})
+                self.assertEqual([page.page_num for page in pages],[1,2,3])
+                self.assertTrue(all(f'Source page {page.page_num}' in page.text for page in pages))
+                self.assertIsNone(pages[0].screenshot_path)
+                self.assertIsNone(pages[2].screenshot_path)
+                self.assertTrue(Path(pages[1].screenshot_path).is_file())
+                self.assertEqual([path.name for path in Path(parser.temp_dir).glob('*.png')],['page_0002.png'])
+            finally:
+                parser.cleanup()
+
 
 if __name__ == "__main__":
     unittest.main()

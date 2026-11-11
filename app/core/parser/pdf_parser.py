@@ -3,7 +3,7 @@ PDF Parser - Extracts text and generates page screenshots using PyMuPDF.
 """
 
 import os
-import tempfile
+from app.core.maintenance import create_workspace
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -29,19 +29,22 @@ class PDFParser:
             temp_dir: Directory for temporary screenshot files
         """
         self.pdf_path = pdf_path
-        self.temp_dir = temp_dir or tempfile.mkdtemp(prefix="noteagent_pdf_")
+        self.temp_dir = temp_dir or create_workspace("pdf")
         self.doc: Optional[fitz.Document] = None
 
-    def parse(self, dpi: int = 200) -> List[PageContent]:
+    def parse(self, dpi: int = 200, cancel_callback=None, skip_pages=None) -> List[PageContent]:
         """
         Parse PDF: extract text and generate screenshots for each page.
 
         Args:
             dpi: Resolution for page screenshots (higher = clearer but larger)
+            skip_pages: One-based cached pages whose images need not be rendered.
+                Text and page numbering are still returned for the whole document.
 
         Returns:
             List of PageContent for each page
         """
+        skipped = set(skip_pages or ())
         if not os.path.exists(self.pdf_path):
             raise FileNotFoundError(f"PDF not found: {self.pdf_path}")
 
@@ -52,13 +55,15 @@ class PDFParser:
         pages: List[PageContent] = []
 
         for page_num in range(len(self.doc)):
+            if cancel_callback and cancel_callback():
+                raise InterruptedError("Document parsing cancelled")
             page = self.doc[page_num]
 
             # Extract text
             text = page.get_text().strip()
 
             # Generate screenshot
-            screenshot_path = self._render_page(page, page_num, dpi)
+            screenshot_path = None if page_num+1 in skipped else self._render_page(page, page_num, dpi)
 
             # Check for embedded images
             image_list = page.get_images(full=True)

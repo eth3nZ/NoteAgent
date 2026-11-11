@@ -1,12 +1,13 @@
 """Jupyter Notebook output that preserves Markdown/code ordering."""
 
-import re
+import ast
 from typing import List
 
 import nbformat
 from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
 from app.core.vision.vision_client import PageAnalysis
+from app.core.markdown_text import OPEN_FENCE, markdown_blocks
 
 
 class NotebookGenerator:
@@ -43,22 +44,33 @@ class NotebookGenerator:
 
     def _markdown_to_cells(self, content: str) -> List[nbformat.NotebookNode]:
         cells: List[nbformat.NotebookNode] = []
-        pattern = re.compile(r"```([^\n`]*)\n(.*?)```", re.DOTALL)
-        position = 0
-
-        for match in pattern.finditer(content):
-            self._append_markdown(cells, content[position:match.start()])
-            language = match.group(1).strip().lower()
-            code = match.group(2).rstrip()
-            if language in self.PYTHON_LANGUAGES:
+        for fenced, block in markdown_blocks(content):
+            if not fenced:
+                self._append_markdown(cells, block)
+                continue
+            lines = block.splitlines(keepends=True)
+            opening = OPEN_FENCE.match(lines[0])
+            closing = OPEN_FENCE.match(lines[-1]) if len(lines) > 1 else None
+            complete = bool(closing and closing[1][0] == opening[1][0] and
+                            len(closing[1]) >= len(opening[1]) and not closing[2].strip())
+            language = opening[2].strip().lower()
+            code = "".join(lines[1:-1]).removesuffix("\n") if complete else ""
+            if complete and language in self.PYTHON_LANGUAGES and self._is_python(code):
                 cells.append(new_code_cell(source=code))
             else:
-                fenced = f"```{match.group(1).strip()}\n{code}\n```"
-                self._append_markdown(cells, fenced)
-            position = match.end()
+                self._append_markdown(cells, block)
 
-        self._append_markdown(cells, content[position:])
         return cells
+
+    @staticmethod
+    def _is_python(code: str) -> bool:
+        # Screenshots can contain output or incomplete snippets mislabeled as Python.
+        # Preserve those verbatim as Markdown rather than creating invalid code cells.
+        try:
+            ast.parse(code)
+        except (SyntaxError, ValueError):
+            return False
+        return True
 
     def _append_markdown(self, cells: List[nbformat.NotebookNode], text: str) -> None:
         text = text.strip()

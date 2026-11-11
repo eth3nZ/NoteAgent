@@ -14,3 +14,9 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+[tool.setuptools.package-data]
+app = ["assets/*.png", "assets/*.icns", "assets/*.ico", "assets/*.svg"]
+
+[tool.setuptools.data-files]
+prompts = ["prompts/*.md"]

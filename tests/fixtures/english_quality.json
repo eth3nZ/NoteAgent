@@ -1,0 +1,38 @@
+{
+  "language": "en",
+  "cases": [
+    {
+      "id": "definition",
+      "source": "Gradient Descent\nGradient descent minimizes a differentiable objective by moving opposite its gradient.\nThe learning rate eta controls the step size.\nw_next = w - eta * gradient(w)",
+      "notes": "## Gradient Descent\n\nGradient descent minimizes a differentiable objective by moving in the direction opposite to its gradient. The learning rate $\\eta$ controls the step size:\n\n$$w_{t+1}=w_t-\\eta\\nabla f(w_t).$$",
+      "literal_checks": ["\\eta", "\\nabla"]
+    },
+    {
+      "id": "worked-example",
+      "source": "Gradient Descent\nWorked example: f(w) = w^2 and gradient(w) = 2w.\nStart at w_0 = 2 with eta = 0.1.\nw_1 = 2 - 0.1 * 4 = 1.6.\nw_2 = 1.6 - 0.1 * 3.2 = 1.28.\nThe objective decreases from 4 to 2.56 after the first step.",
+      "notes": "## Gradient Descent\n\n### Worked example\n\nFor $f(w)=w^2$, the gradient is $2w$. Starting with $w_0=2$ and $\\eta=0.1$, the first update is $w_1=2-0.1(4)=1.6$. The next update gives $w_2=1.6-0.1(3.2)=1.28$. After the first step, the objective decreases from $4$ to $2.56$.",
+      "literal_checks": ["1.6", "1.28", "2.56"]
+    },
+    {
+      "id": "code-literals",
+      "source": "Python Example\nPreserve the numeric literal and blank lines inside the string.\nanswer = (\n    42\n)\nmessage = \"\"\"\n123\n\n\nkept  \n\"\"\"\nprint(answer)",
+      "notes": "## Python Example\n\nThe parenthesized expression is the integer $42$, not an empty tuple. Preserve the multiline string exactly.\n\n```python\nanswer = (\n    42\n)\nmessage = \"\"\"\n123\n\n\nkept  \n\"\"\"\nprint(answer)\n```",
+      "literal_checks": ["answer = (\n    42\n)", "123\n\n\nkept  \n"]
+    },
+    {
+      "id": "scanned-diagram",
+      "source": "Three-layer Network\nInput -> Hidden -> Output\nThe diagram has two input nodes, two hidden nodes and one output node.\nEvery input node connects to each hidden node. Both hidden nodes connect to the output.\nAll arrows point from input toward output.",
+      "image_only": true,
+      "notes": "## Network Structure\n\nThe network contains two input nodes, two hidden nodes and one output node. Every input connects to both hidden nodes, and both hidden nodes connect to the output. All arrows point forward from input through hidden to output.",
+      "literal_checks": ["two input nodes", "two hidden nodes", "one output node"]
+    }
+  ],
+  "manual_review": [
+    "Explanations connect the definition, update rule and worked example without restarting the topic on page 2.",
+    "The gradient sign, learning rate and all numerical updates match the source.",
+    "Code literals, indentation and blank lines match the source exactly; code is never executed.",
+    "The image-only network page preserves node counts, connectivity and arrow direction.",
+    "All explanatory prose is English and does not add unsupported details.",
+    "Source-page review still identifies all four original pages after adjacent headings are merged."
+  ]
+}
