@@ -26,7 +26,7 @@ Already have the project? Open a terminal in its folder and start with the `pyth
 
 On macOS, you can also double-click `setup.command` once, then `run.command` whenever you want to launch. LibreOffice is optional: when installed, it improves PowerPoint rendering.
 
-This development version lives on `feat/note-review-workflow`. The earlier backup branch is preserved; the default `main` branch still contains the initial version.
+This development version lives on `feat/note-review-workflow`. The earlier backup branch is preserved separately.
 
 ## 2. Connect OpenRouter
 
