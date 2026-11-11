@@ -11,7 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QPushButton
 from PyQt6.QtWidgets import QMessageBox
 
 from app.core.configuration import cloud_defaults, make_model_config, migrate_config
@@ -78,8 +78,8 @@ class ResponsiveUITests(unittest.TestCase):
         task = self.show_saved_task()
         self.window.publish_notion.setChecked(True)
         self.assertEqual(self.window.generate_button.text(), "Open notes")
-        self.assertEqual(self.window.export_button.text(), "Export again")
-        self.assertTrue(self.window.open_file_button.isHidden())
+        self.assertEqual(self.window.export_action.text(), "Export again")
+        self.assertFalse(self.window.open_file_action.isVisible())
         with patch("app.ui.main_window.QDesktopServices.openUrl", return_value=True) as opened, \
              patch.object(self.window, "_job_operation") as operation, \
              patch.object(self.window, "_launch") as launch:
@@ -91,21 +91,60 @@ class ResponsiveUITests(unittest.TestCase):
         operation.assert_not_called()
         launch.assert_not_called()
 
+    def test_secondary_operations_share_one_menu_without_duplicate_window_buttons(self):
+        self.show_saved_task()
+        self.assertTrue(self.window.more_button.isVisible())
+        labels = {action.text() for action in self.window.note_actions.actions() if action.isVisible() and not action.isSeparator()}
+        self.assertTrue({'Edit notes','Review sources','Export again'} <= labels)
+        visible_buttons = {button.text() for button in self.window.findChildren(QPushButton) if button.isVisible()}
+        self.assertTrue({'Open notes','More'} <= visible_buttons)
+        self.assertFalse({'Edit notes','Review sources','Export again','Open saved notes'} & visible_buttons)
+
+    def test_saved_actions_remain_available_when_the_next_generation_model_changes(self):
+        self.show_saved_task()
+        self.window._config['vision_model'] = 'test/different-model'
+        self.window.publish_notion.setChecked(True)
+        self.window._render_state()
+        self.assertEqual(self.window.generate_button.text(),'Create notes')
+        self.assertTrue(self.window.edit_action.isEnabled())
+        self.assertTrue(self.window.export_action.isEnabled())
+        self.assertTrue(self.window.publish_action.isVisible())
+        with patch.object(self.window,'_saved_action') as saved:
+            self.window.publish_action.trigger()
+        saved.assert_called_once_with('publish')
+
+    def test_export_menu_action_shows_work_in_progress_before_the_result_arrives(self):
+        task = self.show_saved_task()
+        result = self.window.last_result
+        def job(config, arguments):
+            def operation(worker):
+                time.sleep(.1)
+                return result,task['markdown']
+            return operation
+        with patch.object(self.window,'_job_operation',side_effect=job):
+            self.window.export_action.trigger()
+            self.assertEqual(self.window.status.text(),'Exporting notes…')
+            self.assertFalse(self.window.more_button.isEnabled())
+            self.assertTrue(self.window.cancel_button.isVisible())
+            self.spin(lambda:self.window.worker is None)
+        self.assertEqual(self.window.generate_button.text(),'Open notes')
+        self.assertTrue(self.window.more_button.isEnabled())
+
     def test_export_and_notion_are_separate_actions_on_the_saved_task(self):
         task = self.show_saved_task()
         self.window.publish_notion.setChecked(True)
         self.window.format_combo.setCurrentIndex(self.window.format_combo.findData("ipynb"))
         self.assertEqual(self.window.generate_button.text(), "Open notes")
-        self.assertFalse(self.window.retry_notion_button.isHidden())
+        self.assertTrue(self.window.publish_action.isVisible())
         with patch.object(self.window, "_job_operation", return_value=object()) as operation, \
              patch.object(self.window, "_launch"), \
              patch("app.ui.main_window.QMessageBox.question") as confirmation:
-            self.window.export_button.click()
+            self.window.export_action.trigger()
             arguments = operation.call_args.args[1]
             self.assertEqual(arguments["task_id"], task["id"])
             self.assertEqual(arguments["action"], "export")
             self.assertEqual(arguments["output_format"], "ipynb")
-            self.window.retry_notion_button.click()
+            self.window.publish_action.trigger()
             arguments = operation.call_args.args[1]
             self.assertEqual(arguments["task_id"], task["id"])
             self.assertEqual(arguments["action"], "publish")
@@ -116,8 +155,8 @@ class ResponsiveUITests(unittest.TestCase):
         Path(task["output_path"]).unlink()
         self.window._render_state()
         self.assertEqual(self.window.generate_button.text(), "Export notes")
-        self.assertTrue(self.window.export_button.isHidden())
-        self.assertTrue(self.window.open_file_button.isHidden())
+        self.assertFalse(self.window.export_action.isVisible())
+        self.assertFalse(self.window.open_file_action.isVisible())
         with patch.object(self.window, "_saved_action") as saved, \
              patch.object(self.window, "_start_generation") as generate:
             self.window.generate_button.click()
@@ -127,10 +166,10 @@ class ResponsiveUITests(unittest.TestCase):
     def test_uncertain_notion_retry_still_requires_checking_the_previous_write(self):
         self.show_saved_task(reason="notion_failed")
         self.window.publish_notion.setChecked(True)
-        self.assertEqual(self.window.retry_notion_button.text(), "Retry Notion")
+        self.assertEqual(self.window.publish_action.text(), "Retry Notion")
         with patch("app.ui.main_window.QMessageBox.question", return_value=QMessageBox.StandardButton.No), \
              patch.object(self.window, "_saved_action") as saved:
-            self.window.retry_notion_button.click()
+            self.window.publish_action.trigger()
         saved.assert_not_called()
 
     def test_completed_notes_open_after_the_original_document_is_deleted(self):
@@ -210,6 +249,17 @@ class ResponsiveUITests(unittest.TestCase):
             self.window.generate_button.click()
         reconcile.assert_called_once_with()
 
+    def test_automatic_resume_waits_until_modal_dialogs_and_action_menu_are_closed(self):
+        self.show_saved_task(status='waiting_quota',reason='daily_quota',retry_at=time.time()-10)
+        with patch.object(self.window,'_start_generation') as generate:
+            with patch('app.ui.main_window.QApplication.activeModalWidget',return_value=object()):
+                self.window._check_due()
+            with patch.object(self.window.note_actions,'isVisible',return_value=True):
+                self.window._check_due()
+            generate.assert_not_called()
+            self.window._check_due()
+            generate.assert_called_once_with(resume=True)
+
     def test_delayed_worker_keeps_event_loop_alive_and_blocks_duplicate_launch(self):
         ticks = []
         timer = QTimer()
@@ -284,13 +334,13 @@ class ResponsiveUITests(unittest.TestCase):
         self.window.last_result.notion = NotionPublishResult('page', 'https://notion.so/page', 'append')
         self.window.last_result.revision_id = 7
         self.window.publish_notion.setChecked(True)
-        self.assertEqual(self.window.retry_notion_button.text(), 'Send revision')
+        self.assertEqual(self.window.publish_action.text(), 'Send revision')
         with patch.object(self.window, '_saved_action') as saved:
             with patch('app.ui.main_window.QMessageBox.question', return_value=QMessageBox.StandardButton.No):
-                self.window.retry_notion_button.click()
+                self.window.publish_action.trigger()
             saved.assert_not_called()
             with patch('app.ui.main_window.QMessageBox.question', return_value=QMessageBox.StandardButton.Yes):
-                self.window.retry_notion_button.click()
+                self.window.publish_action.trigger()
             saved.assert_called_once_with('publish')
 
     def test_rendered_preview_starts_at_top_and_does_not_pull_readers_to_the_end(self):
@@ -306,6 +356,37 @@ class ResponsiveUITests(unittest.TestCase):
         self.window._on_stream('\n\n## Last topic\n\nAnother paragraph.')
         self.window._flush_preview()
         self.assertEqual(scrollbar.value(), scrollbar.maximum())
+
+    def test_preview_coalesces_updates_skips_identical_content_and_stops_when_idle(self):
+        self.assertFalse(self.window._preview_timer.isActive())
+        with patch.object(self.window.rendered_preview,'setMarkdown',wraps=self.window.rendered_preview.setMarkdown) as render:
+            self.window._set_preview_markdown('## Topic\n\nA paragraph.')
+            self.window._set_preview_markdown('## Topic\n\nA paragraph.')
+            self.window._render_preview()
+            self.assertEqual(render.call_count,1)
+            for text in ['\n\nMore',' detail','.']:
+                self.window._on_stream(text)
+            self.assertTrue(self.window._preview_timer.isActive())
+            self.window._flush_preview()
+            self.assertEqual(render.call_count,2)
+            self.assertFalse(self.window._preview_timer.isActive())
+            self.window._clear_preview()
+            self.window._set_preview_markdown('## Topic\n\nA paragraph.')
+            self.assertEqual(render.call_count,3)
+
+    def test_completed_estimate_omits_zero_page_coverage_and_irrelevant_paid_warning(self):
+        self.show_saved_task()
+        document = DocumentSummary(self.window.input_file,'source',(100,100),(1024,1024))
+        self.window._estimate = build_estimate(document,self.window._config,quota=AccountQuota(50,50,None,time.time()))
+        self.window._active_context = self.window._estimate_context = self.window._document_context()
+        self.window._render_estimate()
+        self.assertIn('No requests needed',self.window.allowance_metric.detail.text())
+        self.assertNotIn('0 of 0',self.window.allowance_metric.detail.text())
+        self.assertTrue(self.window.estimate_warning.isHidden())
+        self.window.last_result.completed_pages = [1]
+        self.window._render_estimate()
+        self.assertIn('Paid backup is off',self.window.estimate_warning.text())
+        self.assertFalse(self.window.estimate_warning.isHidden())
 
     def test_activity_expands_without_blocking_and_preserves_plain_text(self):
         activity = self.window.activity
@@ -578,4 +659,4 @@ class ResponsiveUITests(unittest.TestCase):
         self.assertEqual(self.window.format_combo.currentData(), "ipynb")
         self.assertEqual(self.window.language_combo.currentData(), "en")
         self.assertEqual(self.window.last_result.notion.url, "https://notion.so/id")
-        self.assertFalse(self.window.open_notion_button.isHidden())
+        self.assertTrue(self.window.open_notion_action.isVisible())

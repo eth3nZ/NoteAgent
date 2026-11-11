@@ -1,7 +1,9 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import pymupdf
 from PIL import Image
 from pptx import Presentation
 from pptx.util import Inches
@@ -15,6 +17,75 @@ class FallbackPPTXParser(PPTXParser):
 
 
 class PowerPointParserTests(unittest.TestCase):
+    def make_deck(self, path, count=3):
+        deck = Presentation()
+        for number in range(1,count+1):
+            slide = deck.slides.add_slide(deck.slide_layouts[6])
+            slide.shapes.add_textbox(Inches(.5),Inches(.5),Inches(6),Inches(1)).text=f'Topic {number}'
+        deck.save(path)
+
+    def test_cached_slides_skip_fallback_rendering_and_keep_original_numbering(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'slides.pptx'
+            self.make_deck(path)
+            parser = FallbackPPTXParser(str(path))
+            try:
+                with patch.object(parser,'_render_slide_fallback',wraps=parser._render_slide_fallback) as render:
+                    pages = parser.parse(dpi=72,skip_pages={1,3})
+                self.assertEqual(render.call_count,1)
+                self.assertEqual(render.call_args.args[1],1)
+                self.assertEqual([page.page_num for page in pages],[1,2,3])
+                self.assertTrue(all(f'Topic {page.page_num}' in page.text for page in pages))
+                self.assertIsNone(pages[0].screenshot_path)
+                self.assertIsNone(pages[2].screenshot_path)
+                self.assertTrue(Path(pages[1].screenshot_path).is_file())
+            finally:
+                parser.cleanup()
+
+    def test_cached_slides_skip_libreoffice_pdf_rasterization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'slides.pptx'
+            self.make_deck(path)
+            parser = PPTXParser(str(path))
+            class Converted:
+                returncode = 0
+                def communicate(self, timeout=None):
+                    output = Path(parser.temp_dir)/'libreoffice/converted.pdf'
+                    if not output.exists():
+                        with pymupdf.open() as document:
+                            for _ in range(3):
+                                document.new_page(width=300,height=200)
+                            document.save(output)
+                    return b'',b''
+                def poll(self):
+                    return 0
+            try:
+                with patch.object(parser,'_find_soffice',return_value='fixture-soffice'), \
+                     patch('app.core.parser.pptx_parser.subprocess.Popen',return_value=Converted()):
+                    pages = parser.parse(dpi=72,skip_pages={1,3})
+                self.assertEqual(parser.render_backend,'libreoffice')
+                self.assertIsNone(pages[0].screenshot_path)
+                self.assertIsNone(pages[2].screenshot_path)
+                self.assertTrue(Path(pages[1].screenshot_path).is_file())
+                self.assertEqual([path.name for path in Path(parser.temp_dir).glob('*.png')],['slide_0002.png'])
+            finally:
+                parser.cleanup()
+
+    def test_fully_cached_pptx_does_not_start_libreoffice_or_draw_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'slides.pptx'
+            self.make_deck(path)
+            parser = PPTXParser(str(path))
+            try:
+                with patch.object(parser,'_render_with_libreoffice',side_effect=AssertionError('No conversion needed')), \
+                     patch.object(parser,'_render_slide_fallback',side_effect=AssertionError('No images needed')):
+                    pages = parser.parse(skip_pages={1,2,3})
+                self.assertEqual(len(pages),3)
+                self.assertTrue(all(page.screenshot_path is None for page in pages))
+                self.assertTrue(all(page.text for page in pages))
+            finally:
+                parser.cleanup()
+
     def test_fallback_preserves_picture_position_and_text(self):
         with tempfile.TemporaryDirectory() as directory:
             image_path = Path(directory) / "red.png"

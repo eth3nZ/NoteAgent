@@ -118,6 +118,7 @@ class SourceDialog(QDialog):
         self._override = None
         self._loaded_page = None
         self._pixmap = QPixmap()
+        self._displayed_image = None
         layout = QVBoxLayout(self)
         row = QHBoxLayout()
         row.addWidget(QLabel('Source page'))
@@ -125,9 +126,9 @@ class SourceDialog(QDialog):
         self.page.setRange(1, max(1, page_count))
         row.addWidget(self.page)
         row.addStretch()
-        locate = QPushButton('Locate source')
-        locate.clicked.connect(self._locate)
-        row.addWidget(locate)
+        self.locate_button = QPushButton('Locate source')
+        self.locate_button.clicked.connect(self._locate)
+        row.addWidget(self.locate_button)
         layout.addLayout(row)
         caption = QLabel('Page numbers refer to the original generated notes. Human revisions can reorganize those notes.')
         caption.setWordWrap(True)
@@ -181,6 +182,7 @@ class SourceDialog(QDialog):
         self._start(render, self._shown)
 
     def _start(self, operation, handler):
+        self.locate_button.setEnabled(False)
         self.worker = TaskWorker(operation, self)
         self.worker.result.connect(handler)
         self.worker.failed.connect(self.status.setText)
@@ -188,9 +190,9 @@ class SourceDialog(QDialog):
         self.worker.start()
 
     def _shown(self, payload):
-        if self._closing:
-            return
         page, data, note = payload
+        if self._closing or page != self.page.value():
+            return
         self._loaded_page = page
         self._pixmap.loadFromData(data)
         self._fit_image()
@@ -199,7 +201,11 @@ class SourceDialog(QDialog):
 
     def _fit_image(self):
         if not self._pixmap.isNull():
-            self.image.setPixmap(self._pixmap.scaledToWidth(max(100, self.scroll.viewport().width()-20), Qt.TransformationMode.SmoothTransformation))
+            width = max(100, self.scroll.viewport().width()-20)
+            identity = (self._pixmap.cacheKey(), width)
+            if identity != self._displayed_image:
+                self._displayed_image = identity
+                self.image.setPixmap(self._pixmap.scaledToWidth(width, Qt.TransformationMode.SmoothTransformation))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -209,6 +215,7 @@ class SourceDialog(QDialog):
     def _finished(self):
         worker, self.worker = self.worker, None
         worker.deleteLater()
+        self.locate_button.setEnabled(not self._closing)
         if self._closing:
             if self._cleaning:
                 super().reject()

@@ -54,9 +54,13 @@ The current default free candidate is `nvidia/nemotron-3.5-super-vl:free`. The a
 
 The app sends extracted text and page images to your selected model in groups of up to eight pages. It preserves accepted groups immediately. If a response is truncated or incomplete, it retries with smaller groups; a persistent single-page failure pauses the task.
 
+Resuming reads document text for context but skips image rendering for accepted pages. A fully cached PPTX run also skips LibreOffice conversion. The original page numbers, cache rules and model request contents are preserved.
+
 Each group receives a bounded local outline and previously accepted topic names to keep organization consistent. Export joins adjacent identical topic headings while retaining the original page records. This adds no extra model request or full-document rewrite. Prompt changes invalidate generation caches for new tasks; existing notes and exports remain available.
 
 The language control applies to new generation. Re-exporting saved notes changes their format or source references; it does not translate them.
+
+The main action stays in one place. **More**, beside it, groups editing, source review, re-exporting and Notion actions for the saved notes shown in the preview. Cancel and paid continuation appear only when relevant; the file and settings layout is unchanged.
 
 ### Read the estimate
 
@@ -80,10 +84,10 @@ For example, **36 pages ≈ 5 requests** means five groups of up to eight pages.
 | **Resume** | Continue the saved task with the free profile, keeping completed pages. |
 | **Waiting for free quota** | Keep completed notes and wait until the displayed retry time. |
 | **Open notes** | Open the saved file. No generation, new export or Notion write. |
-| **Export again** | Save accepted notes in the selected format and folder, without model requests. |
+| **More → Export again** | Save accepted notes in the selected format and folder, without model requests. |
 | **Export notes** | Recreate a missing output file from the cached notes. |
 | **Export revision** | Save the latest human revision to a new local file. |
-| **Export available pages** | Save a partial result with an explicit list of missing pages. |
+| **More → Export available pages** | Save a partial result with an explicit list of missing pages. |
 
 Selecting a new file, language or generation model returns the main button to **Create notes**. Changing the output format, source-reference option, API key or paid-backup settings does not invalidate accepted content. Reusing cached pages also requires matching document contents, prompts and rendering settings.
 
@@ -92,11 +96,15 @@ Selecting a new file, language or generation model returns the main button to **
 After a task completes:
 
 1. Use **Preview** for rendered headings, tables and code, or **Markdown** for the original text. This uses native Qt; formulas remain in LaTeX in the app and render in Notebook/Notion exports.
-2. Select **Review sources** to view an original PDF page or PowerPoint slide alongside its generated note. Rendering runs locally in the background. If the document moved, use **Locate source**; its contents must match the original document.
-3. Select **Edit notes**, make changes in Markdown, and choose **Save revision**. Preview is also available inside the editor. Closing an unsaved edit offers Save, Discard or Cancel.
+2. Select **More → Review sources** to view an original PDF page or PowerPoint slide alongside its generated note. Rendering runs locally in the background. If the document moved, use **Locate source**; its contents must match the original document.
+3. Select **More → Edit notes**, make changes in Markdown, and choose **Save revision**. Preview is also available inside the editor. Closing an unsaved edit offers Save, Discard or Cancel.
 4. Select **Export revision** to save the corrected `.md` or `.ipynb`, or explicitly send it to Notion. Saving a revision itself sends no model or Notion request.
 
 Revisions are stored separately from generated page notes. Re-exporting and publishing use the latest saved revision; cached model results, previous revisions and billing records remain intact. Source-page references describe the generated notes; edited passages are not automatically remapped to source pages. A revision belongs to its saved task and is restored when that task is reopened.
+
+Preview changes are coalesced over 100 ms; identical content is not rendered again and its update timer stops while idle. Reading higher in the preview does not jump to the bottom. During source review, a late page result is discarded if you have already selected another page.
+
+Export/publishing displays its current operation inline. Scheduled free retries wait while a modal dialog or the action menu is open, so work does not restart behind settings or source review.
 
 ## Optional: publish to Notion
 
@@ -106,11 +114,11 @@ Revisions are stored separately from generated page notes. Re-exporting and publ
 4. Enable **Send to Notion** in the main window.
 5. Choose **Create child page** for a separate note, or **Append to page** to add content to the destination.
 
-Generation saves the local file first, then publishes. For completed notes not yet published, **Send to Notion** is a separate action; it does not run the model again. **Open in Notion** opens an existing publication. If a write fails, check the destination before selecting **Retry Notion** because the previous write may already have arrived. Identical confirmed writes are skipped within the saved task.
+Generation saves the local file first, then publishes. For completed notes not yet published, **More → Send to Notion** is a separate action; it does not run the model again. **More → Open in Notion** opens an existing publication. If a write fails, check the destination before selecting **More → Retry Notion** because the previous write may already have arrived. Identical confirmed writes are skipped within the saved task.
 
 Notion receives text, native formulas, tables and code blocks. Original page images are not uploaded to Notion, and notebooks are not executed there. You can also import the generated Markdown manually.
 
-If notes were already published, **Send revision** requires confirmation: append adds a revised copy, and create-child makes a new page. It does not overwrite the existing Notion content. Successfully publishing the same revision again is skipped.
+If notes were already published, **More → Send revision** requires confirmation: append adds a revised copy, and create-child makes a new page. It does not overwrite the existing Notion content. Successfully publishing the same revision again is skipped.
 
 ## Free quota and optional paid backup
 

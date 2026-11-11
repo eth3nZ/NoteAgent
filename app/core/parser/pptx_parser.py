@@ -40,8 +40,9 @@ class PPTXParser:
         self.prs: Optional[Presentation] = None
         self.render_backend = "fallback"
 
-    def parse(self, dpi: int = 160, cancel_callback=None) -> List[PageContent]:
+    def parse(self, dpi: int = 160, cancel_callback=None, skip_pages=None) -> List[PageContent]:
         self.cancel_callback = cancel_callback
+        self._skip_pages = set(skip_pages or ())
         self._check_cancel()
         if not os.path.exists(self.pptx_path):
             raise FileNotFoundError(f"PPTX not found: {self.pptx_path}")
@@ -51,7 +52,7 @@ class PPTXParser:
         except Exception as exc:
             raise ValueError(f"Unable to open PowerPoint file: {exc}") from exc
 
-        rendered = self._render_with_libreoffice(dpi)
+        rendered = [] if set(range(1, len(self.prs.slides)+1)) <= self._skip_pages else self._render_with_libreoffice(dpi)
         if rendered and len(rendered) == len(self.prs.slides):
             self.render_backend = "libreoffice"
         else:
@@ -62,11 +63,12 @@ class PPTXParser:
         for slide_index, slide in enumerate(self.prs.slides):
             self._check_cancel()
             text, has_images = self._extract_slide_content(slide)
-            screenshot_path = (
-                rendered[slide_index]
-                if slide_index < len(rendered)
-                else self._render_slide_fallback(slide, slide_index, dpi)
-            )
+            if slide_index+1 in self._skip_pages:
+                screenshot_path = None
+            elif rendered:
+                screenshot_path = rendered[slide_index]
+            else:
+                screenshot_path = self._render_slide_fallback(slide, slide_index, dpi)
             pages.append(
                 PageContent(
                     page_num=slide_index + 1,
@@ -128,7 +130,7 @@ class PPTXParser:
                 return candidate
         return None
 
-    def _render_with_libreoffice(self, dpi: int) -> List[str]:
+    def _render_with_libreoffice(self, dpi: int) -> List[Optional[str]]:
         soffice = self._find_soffice()
         if not soffice:
             return []
@@ -174,16 +176,18 @@ class PPTXParser:
         if process.returncode != 0 or not pdfs:
             return []
 
-        output_paths: List[str] = []
+        output_paths: List[Optional[str]] = []
         try:
-            document = fitz.open(str(pdfs[0]))
-            matrix = fitz.Matrix(dpi / 72, dpi / 72)
-            for page_index, page in enumerate(document):
-                self._check_cancel()
-                output_path = Path(self.temp_dir) / f"slide_{page_index + 1:04d}.png"
-                page.get_pixmap(matrix=matrix, alpha=False).save(str(output_path))
-                output_paths.append(str(output_path))
-            document.close()
+            with fitz.open(str(pdfs[0])) as document:
+                matrix = fitz.Matrix(dpi / 72, dpi / 72)
+                for page_index, page in enumerate(document):
+                    self._check_cancel()
+                    if page_index+1 in self._skip_pages:
+                        output_paths.append(None)
+                        continue
+                    output_path = Path(self.temp_dir) / f"slide_{page_index + 1:04d}.png"
+                    page.get_pixmap(matrix=matrix, alpha=False).save(str(output_path))
+                    output_paths.append(str(output_path))
         except (fitz.FileDataError, RuntimeError, OSError):
             return []
         return output_paths

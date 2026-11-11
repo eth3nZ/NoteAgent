@@ -182,6 +182,7 @@ class MainWindow(QMainWindow):
         self._closed = False
         self._preview_buffer = []
         self._preview_markdown = ""
+        self._rendered_markdown = None
         self._after_worker = None
         self.tray_icon = None
         self._estimate_worker = None
@@ -202,8 +203,8 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(APP_STYLE)
         self._preview_timer = QTimer(self)
         self._preview_timer.setInterval(100)
+        self._preview_timer.setSingleShot(True)
         self._preview_timer.timeout.connect(self._flush_preview)
-        self._preview_timer.start()
         self._retry_timer = QTimer(self)
         self._retry_timer.setInterval(30000)
         self._retry_timer.timeout.connect(self._check_due)
@@ -388,33 +389,33 @@ class MainWindow(QMainWindow):
         self.generate_button = QPushButton("Create notes")
         self.generate_button.setObjectName("primary")
         self.generate_button.clicked.connect(self._primary_action)
-        self.export_button = QPushButton("Export available pages")
-        self.export_button.setToolTip("Save the accepted notes in the selected format and folder. No model requests or Notion publishing.")
-        self.export_button.clicked.connect(lambda: self._saved_action("export"))
-        self.open_notion_button = QPushButton("Open in Notion")
-        self.open_notion_button.clicked.connect(self._open_notion)
-        self.retry_notion_button = QPushButton("Send to Notion")
-        self.retry_notion_button.clicked.connect(self._retry_notion)
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.clicked.connect(self._cancel_generation)
         self.paid_button = QPushButton("Use paid backup")
         self.paid_button.clicked.connect(self._continue_paid)
+        self.more_button = QPushButton("More")
+        self.more_button.setToolTip("Actions for the saved notes shown below")
+        self.note_actions = QMenu(self.more_button)
+        self.more_button.setMenu(self.note_actions)
+        self.edit_action = self.note_actions.addAction('Edit notes', self._edit_notes)
+        self.source_action = self.note_actions.addAction('Review sources', self._review_sources)
+        self._export_separator = self.note_actions.addSeparator()
+        self.export_action = self.note_actions.addAction('Export available pages', lambda:self._saved_action('export'))
+        self.export_action.setToolTip('Save accepted notes in the selected format and folder. No model requests or Notion publishing.')
+        self.open_file_action = self.note_actions.addAction('Open previous export', self._open_output)
+        self._notion_separator = self.note_actions.addSeparator()
+        self.publish_action = self.note_actions.addAction('Send to Notion', self._retry_notion)
+        self.open_notion_action = self.note_actions.addAction('Open in Notion', self._open_notion)
+        self._charge_separator = self.note_actions.addSeparator()
+        self.reconcile_action = self.note_actions.addAction('Reconcile charge', self._reconcile)
+        self.note_actions.aboutToShow.connect(self._render_state)
         actions.addWidget(self.generate_button, 1)
-        for button in (self.export_button, self.open_notion_button, self.retry_notion_button,
-                       self.paid_button, self.cancel_button):
+        for button in (self.paid_button, self.cancel_button, self.more_button):
             actions.addWidget(button)
         outer.addLayout(actions)
-        review_row = QHBoxLayout()
         self.revision_status = QLabel('Notes')
         self.revision_status.setObjectName('muted')
-        review_row.addWidget(self.revision_status, 1)
-        self.source_button = QPushButton('Review sources')
-        self.source_button.clicked.connect(self._review_sources)
-        review_row.addWidget(self.source_button)
-        self.edit_button = QPushButton('Edit notes')
-        self.edit_button.clicked.connect(self._edit_notes)
-        review_row.addWidget(self.edit_button)
-        outer.addLayout(review_row)
+        self.revision_status.setContentsMargins(0, 0, 5, 0)
         self.notes_tabs = QTabWidget()
         self.rendered_preview = MarkdownBrowser()
         self.rendered_preview.setToolTip('Native Markdown preview. Formulas remain in LaTeX; Notebook and Notion render them on export.')
@@ -426,20 +427,11 @@ class MainWindow(QMainWindow):
         self.notes_tabs.addTab(self.rendered_preview, 'Preview')
         self.notes_tabs.addTab(self.preview, 'Markdown')
         self.notes_tabs.currentChanged.connect(self._render_preview)
+        self.notes_tabs.setCornerWidget(self.revision_status, Qt.Corner.TopRightCorner)
         outer.addWidget(self.notes_tabs, 1)
         self.activity = ActivityPanel()
         self.details_button, self.log = self.activity.toggle_button, self.activity.log
         outer.addWidget(self.activity)
-        detail_row = QHBoxLayout()
-        self.reconcile_button = QPushButton("Reconcile charge")
-        self.reconcile_button.clicked.connect(self._reconcile)
-        detail_row.addWidget(self.reconcile_button)
-        results = detail_row
-        results.addStretch()
-        self.open_file_button = QPushButton("Open saved notes")
-        self.open_file_button.clicked.connect(self._open_output)
-        results.addWidget(self.open_file_button)
-        outer.addLayout(results)
 
     def _restore_ui_config(self):
         self.output_path.setText(self._config.get("output_dir", ""))
@@ -468,6 +460,14 @@ class MainWindow(QMainWindow):
         scrollbar.setValue(round(position * scrollbar.maximum()))
         self._save_config()
 
+    def _clear_preview(self):
+        self._preview_timer.stop()
+        self._preview_buffer.clear()
+        self._preview_markdown = ""
+        self._rendered_markdown = None
+        self.preview.clear()
+        self.rendered_preview.clear()
+
     def _set_preview_markdown(self, markdown):
         self._preview_markdown = markdown
         self.preview.setPlainText(render_source_pages(markdown, self.include_source_pages.isChecked()))
@@ -476,10 +476,14 @@ class MainWindow(QMainWindow):
     def _render_preview(self, follow=False):
         if self.notes_tabs.currentIndex() != 0:
             return
+        markdown = self.preview.toPlainText()
+        if markdown == self._rendered_markdown:
+            return
+        self._rendered_markdown = markdown
         scrollbar = self.rendered_preview.verticalScrollBar()
         position, maximum = scrollbar.value(), scrollbar.maximum()
         follow = follow and position >= maximum-4
-        self.rendered_preview.setMarkdown(self.preview.toPlainText())
+        self.rendered_preview.setMarkdown(markdown)
         scrollbar.setValue(scrollbar.maximum() if follow else min(position, scrollbar.maximum()))
 
     def _document_context(self):
@@ -639,28 +643,33 @@ class MainWindow(QMainWindow):
         remaining = estimate.quota.remaining_requests if estimate.quota else None
         if remaining is not None:
             coverage = min(pending, remaining * segment)
-            self.allowance_metric.set_content(f"{remaining} requests", f"≈ {coverage} of {pending} remaining pages\nExcludes retries",
+            detail = 'No requests needed for this document' if not pending else f"≈ {coverage} of {pending} remaining pages\nExcludes retries"
+            self.allowance_metric.set_content(f"{remaining} requests", detail,
                 estimate.quota_note + f"\nAssumes {segment} pages per request; shared usage and retries affect coverage.")
         else:
             detail = ("Managed by your service" if self._config.get("provider") != "openrouter" else
                       "Allowance not reported")
+            if not pending:
+                detail = 'No requests needed for this document'
             self.allowance_metric.set_content("Unknown", detail, estimate.quota_note)
         if estimate.backup_enabled:
             name = estimate.cost_model.split("/", 1)[-1]
-            if estimate.cost_low is not None:
+            if not pending:
+                self.backup_metric.set_content('Not needed', name, f'Selected backup: {estimate.cost_model}')
+            elif estimate.cost_low is not None:
                 factor = pending / max(1, estimate.pending_pages)
                 self.backup_metric.set_content(f"${estimate.cost_low*factor:.3f}–${estimate.cost_high*factor:.3f}",
                     name + "\nIf all remaining pages use backup", estimate.price_note + f"\nSelected backup: {estimate.cost_model}")
             else:
                 self.backup_metric.set_content("Unknown", name + "\nPrice unavailable · refresh", estimate.price_note)
         warnings = []
-        if self._config.get("provider") != "openrouter":
+        if pending and self._config.get("provider") != "openrouter":
             warnings.append("Custom service: allowance and cost are unverified; provider charges may apply.")
-        elif not estimate.backup_enabled:
+        elif pending and not estimate.backup_enabled:
             warnings.append("Paid backup is off · notes are saved and the task pauses if free quota runs out.")
         if remaining is not None and pending > remaining * segment:
             warnings.append("Today's free allowance may not cover the remaining pages.")
-        if estimate.backup_enabled and estimate.backup_warning:
+        if pending and estimate.backup_enabled and estimate.backup_warning:
             warnings.append(estimate.backup_warning)
         self.estimate_warning.setText("\n".join(warnings))
         self.estimate_warning.setVisible(bool(warnings))
@@ -694,28 +703,37 @@ class MainWindow(QMainWindow):
         self.cancel_button.setVisible(busy)
         self.cancel_button.setEnabled(busy and not self.worker.isInterruptionRequested())
         has_notes = bool(result and (result.completed_pages or result.revision_id))
-        self.export_button.setEnabled(not busy and has_notes)
-        self.export_button.setVisible(has_notes and action != "export")
-        self.export_button.setText("Export again" if result and result.status == "completed" else "Export available pages")
-        self.retry_notion_button.setVisible(bool(self._matches_current_task() and result.status == "completed" and
+        self.export_action.setEnabled(not busy and has_notes)
+        self.export_action.setVisible(has_notes and action != "export")
+        self.export_action.setText("Export again" if result and result.status == "completed" else "Export available pages")
+        self.publish_action.setVisible(bool(result and result.status == "completed" and
                                                 self.publish_notion.isChecked() and
                                                 (not result.notion or result.revision_id != result.published_revision_id or
                                                  result.reason in {"notion_failed", "notion_setup"})))
-        self.retry_notion_button.setText("Retry Notion" if result and result.reason == "notion_failed" else
+        self.publish_action.setText("Retry Notion" if result and result.reason == "notion_failed" else
                                         'Send revision' if result and result.notion and result.revision_id != result.published_revision_id else "Send to Notion")
-        self.retry_notion_button.setEnabled(not busy)
-        self.reconcile_button.setVisible(bool(result and result.reason in {"uncertain_cost", "interrupted"} and action != "reconcile"))
-        self.reconcile_button.setEnabled(not busy)
-        self.open_file_button.setVisible(bool(result and result.output_path and os.path.isfile(result.output_path) and action != "open"))
-        self.open_file_button.setEnabled(not busy)
-        self.open_notion_button.setVisible(bool(result and result.notion))
-        self.open_notion_button.setEnabled(not busy)
-        self.source_button.setVisible(bool(result and result.page_count))
-        self.source_button.setEnabled(not busy)
-        self.edit_button.setVisible(bool(result and result.status == 'completed' and self._preview_markdown))
-        self.edit_button.setEnabled(not busy and self._matches_current_task())
-        self.revision_status.setText('Saved revision · export to update the local file' if result and result.revision_id != result.exported_revision_id else
-                                     'Saved revision' if result and result.revision_id else 'Generated notes')
+        self.publish_action.setEnabled(not busy)
+        self.reconcile_action.setVisible(bool(result and result.reason in {"uncertain_cost", "interrupted"} and action != "reconcile"))
+        self.reconcile_action.setEnabled(not busy)
+        self.open_file_action.setVisible(bool(result and result.output_path and os.path.isfile(result.output_path) and action != "open"))
+        self.open_file_action.setEnabled(not busy)
+        self.open_notion_action.setVisible(bool(result and result.notion))
+        self.open_notion_action.setEnabled(not busy)
+        self.source_action.setVisible(bool(result and result.page_count))
+        self.source_action.setEnabled(not busy)
+        self.edit_action.setVisible(bool(result and result.status == 'completed' and self._preview_markdown))
+        self.edit_action.setEnabled(not busy and self._owns_lock)
+        self._export_separator.setVisible(self.export_action.isVisible() or self.open_file_action.isVisible())
+        self._notion_separator.setVisible(self.publish_action.isVisible() or self.open_notion_action.isVisible())
+        self._charge_separator.setVisible(self.reconcile_action.isVisible())
+        self.more_button.setVisible(any(action.isVisible() and not action.isSeparator() for action in self.note_actions.actions()))
+        self.more_button.setEnabled(not busy and self._owns_lock)
+        if busy:
+            self.note_actions.hide()
+        revised = bool(result and result.revision_id)
+        needs_export = bool(result and result.revision_id != result.exported_revision_id)
+        self.revision_status.setText('Revision · not exported' if needs_export else 'Saved revision' if revised else 'Generated notes' if result else '')
+        self.revision_status.setToolTip('Export the saved revision to update the local file.' if needs_export else 'Revisions keep the generated source-page notes intact.' if revised else '')
         for widget in (self.drop_zone, self.output_path, self.browse_output, self.format_combo,
                        self.language_combo, self.include_source_pages, self.publish_notion, self.settings_button):
             widget.setEnabled(not busy)
@@ -841,10 +859,7 @@ class MainWindow(QMainWindow):
         if self._estimate_worker is not None:
             self._estimate_worker.requestInterruption()
         self._estimate_pending = True
-        self._preview_buffer.clear()
-        self._preview_markdown = ""
-        self.preview.clear()
-        self.rendered_preview.clear()
+        self._clear_preview()
         self.activity.clear()
         self.status.setText("Preparing document…")
         self.activity.add_event("Preparing document…")
@@ -854,7 +869,10 @@ class MainWindow(QMainWindow):
         if self._busy() or not self.task_id:
             return
         arguments = {**self._arguments(), "task_id": self.task_id, "action": action}
-        self._launch(self._job_operation(dict(self._config), arguments), self._on_result)
+        if self._launch(self._job_operation(dict(self._config), arguments), self._on_result):
+            message = 'Exporting notes…' if action == 'export' else 'Sending notes to Notion…'
+            self.status.setText(message)
+            self.activity.add_event(message)
 
     def _edit_notes(self):
         if self._busy() or not self.last_result or self.last_result.status != 'completed':
@@ -939,6 +957,8 @@ class MainWindow(QMainWindow):
 
     def _check_due(self):
         result = self.last_result
+        if QApplication.activeModalWidget() is not None or self.note_actions.isVisible():
+            return
         if (not self._closed and not self._busy() and self._matches_current_task() and
                 result.status == "waiting_quota" and result.retry_at and time.time() >= result.retry_at):
             self._start_generation(resume=True)
@@ -956,8 +976,11 @@ class MainWindow(QMainWindow):
     def _on_stream(self, text):
         self._preview_markdown += text
         self._preview_buffer.append(render_source_pages(text, self.include_source_pages.isChecked()))
+        if not self._preview_timer.isActive():
+            self._preview_timer.start()
 
     def _flush_preview(self):
+        self._preview_timer.stop()
         if not self._preview_buffer:
             return
         scrollbar = self.preview.verticalScrollBar()
@@ -1039,10 +1062,7 @@ class MainWindow(QMainWindow):
             return
         self.input_file, self.task_id, self.last_result = path, None, None
         self._task_context = None
-        self._preview_markdown = ""
-        self._preview_buffer.clear()
-        self.preview.clear()
-        self.rendered_preview.clear()
+        self._clear_preview()
         self.drop_zone.set_file(path)
         self.status.setText("Ready · free requests first")
         self._render_state()
@@ -1052,10 +1072,7 @@ class MainWindow(QMainWindow):
         if not self._busy():
             self.input_file = self.task_id = self.last_result = None
             self._task_context = None
-            self._preview_markdown = ""
-            self._preview_buffer.clear()
-            self.preview.clear()
-            self.rendered_preview.clear()
+            self._clear_preview()
             self._schedule_estimate()
             self._render_state()
 

@@ -132,3 +132,17 @@ class ReviewDialogTests(unittest.TestCase):
             dialog.reject()
             self.assertTrue(dialog.worker.isInterruptionRequested())
             self.spin(lambda:dialog.worker is None and not dialog.isVisible())
+
+    def test_late_source_page_results_do_not_replace_the_page_being_viewed(self):
+        dialog = SourceDialog(self.store.path,self.task,2)
+        self.dialogs.append(dialog)
+        dialog.show()
+        self.spin(lambda:dialog.worker is None and dialog._loaded_page == 1)
+        displayed = dialog._pixmap.toImage()
+        key = dialog.image.pixmap().cacheKey()
+        dialog._fit_image()
+        self.assertEqual(dialog.image.pixmap().cacheKey(),key)
+        dialog._shown((2,dialog.renderer.render(2),'A stale result'))
+        self.assertEqual(dialog._loaded_page,1)
+        self.assertEqual(dialog._pixmap.toImage(),displayed)
+        self.assertTrue(dialog.locate_button.isEnabled())

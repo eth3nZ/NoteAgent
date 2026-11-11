@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import nbformat
 import pymupdf
@@ -13,6 +14,7 @@ from app.core.cloud import CloudError, ModelConfig, SegmentResponse
 from app.core.jobs import next_free_reset
 from app.core.notion import NotionPublishResult
 from app.core.pipeline import Pipeline
+from app.core.parser.pdf_parser import PDFParser
 from app.core.task_store import BudgetExceeded, TaskBusy, TaskStore
 
 
@@ -96,6 +98,24 @@ class JobTests(unittest.TestCase):
         second = self.run_job(task_id=first.task_id)
         self.assertEqual(second.status, "completed")
         self.assertEqual(self.client.calls, [list(range(1, 9)), list(range(9, 17)), [17]])
+
+    def test_resume_and_cached_rerun_do_not_render_accepted_pages(self):
+        first = self.run_job(cancel_callback=lambda:len(self.client.calls) >= 1)
+        self.assertEqual(first.completed_pages,list(range(1,9)))
+        rendered = []
+        render = PDFParser._render_page
+        def observed(parser, page, index, dpi):
+            rendered.append(index+1)
+            return render(parser,page,index,dpi)
+        with patch.object(PDFParser,'_render_page',observed):
+            resumed = self.run_job(task_id=first.task_id)
+        self.assertEqual(resumed.status,'completed')
+        self.assertEqual(rendered,list(range(9,18)))
+        before = len(self.client.calls)
+        with patch.object(PDFParser,'_render_page',side_effect=AssertionError('Cached pages must not be rendered')):
+            cached = self.run_job()
+        self.assertEqual(cached.status,'completed')
+        self.assertEqual(len(self.client.calls),before)
 
     def test_cross_segment_navigation_reuses_only_previously_accepted_topic_names(self):
         contexts = []

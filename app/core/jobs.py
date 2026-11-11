@@ -104,13 +104,13 @@ class DocumentJob:
         parser = None
         try:
             self._emit("Preparing document…")
+            cached = self._notes()
             parser = self.pipeline._make_parser(str(path))
-            pages = parser.parse(dpi=self.DPI, cancel_callback=self.cancel)
+            pages = parser.parse(dpi=self.DPI, cancel_callback=self.cancel, skip_pages=cached)
             if not pages:
                 raise ValueError("The document has no readable pages")
             self.store.update(self.task_id, page_count=len(pages))
             outline = source_outline(pages)
-            cached = self._notes()
             if cached:
                 self._emit(f"Reusing {len(cached)} cached pages")
                 if self.stream:
