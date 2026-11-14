@@ -14,6 +14,8 @@ from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from app.core.source_review import SourceRenderer
+from app.core.cloud import SegmentResponse
+from app.core.markdown_text import NON_CONTENT_PAGE
 from app.core.task_store import TaskStore
 from app.ui.review import MarkdownBrowser, RevisionDialog, SourceDialog
 
@@ -111,6 +113,21 @@ class ReviewDialogTests(unittest.TestCase):
             browser._open_link(QUrl('file:///private/secret.txt'))
             opened.assert_not_called()
         browser.deleteLater()
+
+    def test_non_content_receipt_is_explained_without_exposing_the_internal_marker(self):
+        request = self.store.reserve(self.task,'fixture',False,0)
+        self.store.commit_response(request,'fixture',SegmentResponse(
+            {1:NON_CONTENT_PAGE,2:'## Topic\nA useful fact.'},'stop','fixture'),True)
+        dialog = SourceDialog(self.store.path,self.task,2)
+        self.dialogs.append(dialog)
+        dialog.show()
+        self.spin(lambda:dialog.worker is None and dialog._loaded_page == 1)
+        self.assertNotIn(NON_CONTENT_PAGE,dialog.excerpt.toPlainText())
+        self.assertIn('was reviewed',dialog.excerpt.toPlainText())
+        self.assertIn('no study content',dialog.status.text())
+        dialog.page.setValue(2)
+        self.spin(lambda:dialog.worker is None and dialog._loaded_page == 2)
+        self.assertIn('A useful fact.',dialog.excerpt.toPlainText())
 
     def test_source_pages_load_in_background_and_close_cooperatively(self):
         dialog = SourceDialog(self.store.path, self.task, 2)

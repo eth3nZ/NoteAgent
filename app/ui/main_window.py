@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 
 from app.core.configuration import cloud_defaults, make_client, make_model_config, migrate_config
 from app.core.settings_store import SettingsStore
+from app.core.markdown_text import is_non_content_page
 from app.core.generator.markdown import render_source_pages
 from app.core.maintenance import clean_storage, format_bytes
 from app.core.notion import NotionClient, NotionPublishResult
@@ -828,7 +829,8 @@ class MainWindow(QMainWindow):
         elif task["markdown"]:
             self._set_preview_markdown(task["markdown"])
         else:
-            self._set_preview_markdown("\n\n".join(f"{text}\n\n> Source: page {page}" for page, text in sorted(task["notes"].items())))
+            self._set_preview_markdown("\n\n".join(f"{text}\n\n> Source: page {page}" for page, text in sorted(task["notes"].items())
+                                                  if not is_non_content_page(text)))
         self._on_state(self.last_result)
         self._schedule_estimate()
 

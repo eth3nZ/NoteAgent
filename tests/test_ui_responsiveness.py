@@ -74,6 +74,17 @@ class ResponsiveUITests(unittest.TestCase):
             self.window._restore_previous(task)
         return task
 
+    def test_restore_keeps_non_content_receipts_in_progress_without_showing_markers(self):
+        from app.core.markdown_text import NON_CONTENT_PAGE
+        task = self.show_saved_task()
+        task['notes'] = {1:NON_CONTENT_PAGE,2:'## Topic\nA useful fact.'}
+        task['markdown'] = ''
+        with patch.object(self.window,'_schedule_estimate'):
+            self.window._restore_previous(task)
+        self.assertEqual(self.window.last_result.completed_pages,[1,2])
+        self.assertNotIn(NON_CONTENT_PAGE,self.window.preview.toPlainText())
+        self.assertIn('A useful fact.',self.window.preview.toPlainText())
+
     def test_completed_primary_opens_existing_notes_without_generation_or_publishing(self):
         task = self.show_saved_task()
         self.window.publish_notion.setChecked(True)

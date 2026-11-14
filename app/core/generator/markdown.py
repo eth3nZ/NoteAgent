@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import List
 
 from app.core.vision.vision_client import PageAnalysis
-from app.core.markdown_text import OPEN_FENCE, map_prose, markdown_blocks, prose_text
+from app.core.markdown_text import OPEN_FENCE, is_non_content_page, map_prose, markdown_blocks, prose_text
 
 
 def render_source_pages(content: str, include_source_pages: bool = False) -> str:
@@ -91,6 +91,8 @@ class MarkdownGenerator:
     def sanitize_fragment(self, content: str) -> str:
         """Clean prose and incidental console chrome, preserving source code verbatim."""
         content = self._strip_markdown_wrappers(content.strip())
+        if is_non_content_page(content):
+            return ""
         blocks = []
         for fenced, block in markdown_blocks(content):
             if not fenced:

@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout
                             QTabWidget, QTextBrowser, QVBoxLayout)
 
 from app.core.source_review import SourceRenderer
+from app.core.markdown_text import is_non_content_page
 from app.core.task_store import TaskStore
 from app.ui.workers import TaskWorker
 
@@ -196,8 +197,9 @@ class SourceDialog(QDialog):
         self._loaded_page = page
         self._pixmap.loadFromData(data)
         self._fit_image()
-        self.excerpt.setPlainText(note)
-        self.status.setText(f'Original page {page} · generated note below')
+        omitted = is_non_content_page(note)
+        self.excerpt.setPlainText('This page was reviewed and marked as containing no study content. Check the source image if this looks unexpected.' if omitted else note)
+        self.status.setText(f'Original page {page} · ' + ('reviewed, no study content included' if omitted else 'generated note below'))
 
     def _fit_image(self):
         if not self._pixmap.isNull():

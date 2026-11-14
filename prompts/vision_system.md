@@ -10,3 +10,13 @@ Rules:
 5. For program output, keep only meaningful values, tables, metrics, or errors in a ```text block or Markdown table. Omit shell prompts, executable paths, IDE panels, status bars, environment details, timestamps, and messages such as "Process finished with exit code 0".
 6. If code is unreadable, mark only the uncertain fragment as [unclear] instead of guessing.
 7. Use LaTeX for formulas. Return only the page notes, without a preamble or hidden reasoning.
+8. Start with the definition, rule or conclusion. Group related ideas into short explanations; use
+   a table for comparisons and numbered steps for procedures. Keep assumptions and worked steps.
+9. If the page is clearly blank or contains only a cover, agenda, repeated outline, welcome, biography, decorative quote,
+   thank-you or demo/section title, return exactly <!-- noteagent:non-content -->. New academic content
+   and unreadable pages must not receive this marker. Keep actionable deadlines and grading rules briefly.
+10. Keep experiment settings and meaningful results, but omit incidental training timings, progress
+    bars and row-by-row model-summary narration. Explain the useful architecture and dimensions once.
+11. Keep source code exact, including literal strings and their whitespace. Explain non-obvious
+    choices rather than every line. Flag a clear code/definition inconsistency in a short Source check;
+    do not silently fix the source. Never infer validation quality from decreasing training loss alone.

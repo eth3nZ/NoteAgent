@@ -16,6 +16,7 @@ from PIL import Image, ImageDraw
 
 from app.core.cloud import CloudClient, FREE_MODEL, ModelConfig
 from app.core.pipeline import Pipeline
+from app.core.markdown_text import NON_CONTENT_PAGE
 from app.core.task_store import TaskStore
 
 
@@ -54,8 +55,10 @@ def create_pdf(path, cases):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output-dir', type=Path, default=Path('dev_artifacts/english-quality'))
+    parser.add_argument('--fixture', type=Path, default=Path(__file__).resolve().parents[1]/'tests/fixtures/english_quality.json',
+                        help='Local source and fixed responses; never a model-quality evaluation')
     args = parser.parse_args()
-    fixtures = json.loads((Path(__file__).resolve().parents[1]/'tests/fixtures/english_quality.json').read_text())
+    fixtures = json.loads(args.fixture.read_text(encoding='utf-8'))
     output = args.output_dir
     output.mkdir(parents=True, exist_ok=True)
     version = hashlib.sha256(json.dumps(fixtures,sort_keys=True).encode()+Path(__file__).read_bytes()).hexdigest()[:8]
@@ -80,16 +83,29 @@ def main():
     pipeline = Pipeline(client, store=store)
     result = pipeline.run(str(source), str(output), language='en')
     markdown = Path(result.output_path).read_text()
-    checks = {case['id']:all(value in markdown for value in case['literal_checks']) for case in fixtures['cases']}
-    checks['adjacent_topic_merged'] = markdown.count('## Gradient Descent') == 1
+    accepted = {page:note for segment in store.segments(store.get(result.task_id)['cache_key']) for page,note in segment['notes'].items()}
+    checks = {case['id']:(accepted.get(page) == NON_CONTENT_PAGE and NON_CONTENT_PAGE not in markdown
+                         if case.get('non_content') else all(value in markdown for value in case['literal_checks']))
+              for page,case in enumerate(fixtures['cases'],1)}
+    counts = fixtures.get('heading_counts', {'## Gradient Descent':1})
+    checks['adjacent_topic_merged'] = all(markdown.count(heading) == count for heading,count in counts.items())
+    for value,count in fixtures.get('occurrence_checks', {}).items():
+        checks['occurrence:'+value] = markdown.count(value) == count
+    checks['irrelevant_text_absent'] = not any(value in markdown for value in fixtures.get('excluded_text', []))
+    checks['all_pages_accounted_for'] = result.completed_pages == list(range(1,len(fixtures['cases'])+1))
     notebook = pipeline.run('', str(output), output_format='ipynb', task_id=result.task_id, action='export')
     cells = nbformat.read(notebook.output_path, as_version=4).cells
     checks['code_unexecuted'] = all(cell.execution_count is None and not cell.outputs for cell in cells if cell.cell_type == 'code')
     with pymupdf.open(source) as document:
-        checks['scanned_page_has_no_text_layer'] = not document[-1].get_text().strip()
+        scanned = [index for index,case in enumerate(fixtures['cases']) if case.get('image_only')]
+        checks['scanned_page_has_no_text_layer'] = bool(scanned) and all(not document[index].get_text().strip() for index in scanned)
+    before = len(requests)
+    rerun = pipeline.run(str(source), str(output), language='en')
+    checks['cache_rerun_has_no_inference'] = len(requests) == before and rerun.status == 'completed'
     report = {'mode':'offline-fixture', 'model_quality':'NOT ASSESSED: responses are fixed fixtures, not model outputs',
               'checks':checks, 'mock_inference_requests':len(requests), 'source':str(source),
               'markdown':result.output_path, 'notebook':notebook.output_path,
+              'reviewed_non_content_pages':[page for page,case in enumerate(fixtures['cases'],1) if case.get('non_content')],
               'manual_review_for_future_live_run':fixtures['manual_review']}
     (output/'review.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
     print(json.dumps(report, indent=2))

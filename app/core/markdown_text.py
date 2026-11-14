@@ -4,6 +4,12 @@ import re
 
 
 OPEN_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})([^\r\n]*)")
+NON_CONTENT_PAGE = "<!-- noteagent:non-content -->"
+
+
+def is_non_content_page(content):
+    """Only the entire reserved receipt is omitted; never remove mixed content or code."""
+    return isinstance(content, str) and content.strip() == NON_CONTENT_PAGE
 
 
 def markdown_blocks(content):

@@ -9,6 +9,7 @@ from pathlib import Path
 from app.core.cloud import CloudError, RequestCancelled
 from app.core.generator.markdown import render_source_pages
 from app.core.note_structure import assemble_notes, navigation_context, source_outline
+from app.core.markdown_text import is_non_content_page
 from app.core.pipeline import PipelineCancelled, PipelineResult
 from app.core.task_store import BudgetExceeded, TaskStore
 from app.utils.helpers import ensure_output_dir, normalize_page_id, validate_file_type
@@ -166,8 +167,10 @@ class DocumentJob:
                     self.store.update(self.task_id, status="paused", reason=f"page_{numbers[0]}_{response.finish_reason}")
                     return self._result()
                 if self.stream:
-                    fragment = "\n\n".join(f"{text}\n\n> Source: page {page}" for page, text in sorted(response.notes.items())) + "\n\n"
-                    self.stream(fragment)
+                    visible = [f"{text}\n\n> Source: page {page}" for page, text in sorted(response.notes.items())
+                               if not is_non_content_page(text)]
+                    if visible:
+                        self.stream("\n\n".join(visible) + "\n\n")
                 self._emit(f"Saved source pages {numbers[0]}–{numbers[-1]} · {response.model} · {response.provider or 'provider not reported'}")
                 if self.store.uncertain(self.task_id):
                     self.store.update(self.task_id, status="paused", reason="uncertain_cost")

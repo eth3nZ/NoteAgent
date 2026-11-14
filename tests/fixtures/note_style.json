@@ -1,0 +1,60 @@
+{
+  "cases": [
+    {
+      "id": "demo-divider",
+      "source": "Demo\nMNIST DIGITS",
+      "non_content": true,
+      "notes": "<!-- noteagent:non-content -->",
+      "literal_checks": []
+    },
+    {
+      "id": "concept-first",
+      "source": "Variational Autoencoders\nA variational autoencoder represents each input with a latent distribution.\nThe encoder outputs a mean and log variance; a sampled latent vector enters the decoder.\nTraining combines reconstruction loss and KL divergence.",
+      "notes": "## Variational Autoencoders\n\nA variational autoencoder represents each input with a latent distribution.\n\n- Flow: encoder → mean and log variance → sampling → decoder.\n- Objective: reconstruction loss + KL divergence.",
+      "literal_checks": ["Flow: encoder", "reconstruction loss + KL divergence"]
+    },
+    {
+      "id": "continued-example",
+      "source": "Variational Autoencoders\nA variational autoencoder represents each input with a latent distribution.\nWorked example: mu=1, log variance=0, epsilon=2.\nsigma=exp(0.5 * 0)=1. z=1+1*2=3.",
+      "notes": "## Variational Autoencoders\n\nA variational autoencoder represents each input with a latent distribution.\n\n### Worked example\n\nFor $\\mu=1$, $\\log\\sigma^2=0$ and $\\epsilon=2$, the standard deviation is $\\sigma=\\exp(0.5\\times0)=1$, so $z=1+1\\times2=3$.",
+      "literal_checks": ["### Worked example", "$z=1+1\\times2=3$"]
+    },
+    {
+      "id": "source-inconsistency",
+      "source": "VAE sampling code\nlog_var is defined as log(variance).\ndef sample(mu, log_var, epsilon):\n    return mu + epsilon * exp(log_var)",
+      "notes": "## Variational Autoencoders\n\n### Sampling code\n\n```python\ndef sample(mu, log_var, epsilon):\n    return mu + epsilon * exp(log_var)\n```\n\n**Source check:** With `log_var` defined as log variance, `exp(log_var)` is variance, not standard deviation. Verify this scaling against the source before using the snippet.",
+      "literal_checks": ["return mu + epsilon * exp(log_var)", "**Source check:**"]
+    },
+    {
+      "id": "meaningful-training-results",
+      "source": "VAE Training\nOptimizer: Adam. Epochs: 3. Batch size: 32.\nEpoch 1 loss=4.0, time=6s, step=4ms\nEpoch 2 loss=2.56, time=5s, step=4ms\nEpoch 3 loss=1.6384, time=5s, step=3ms\nModel summary internal layer names: dense_23 and dense_24.\nNo validation metrics are provided.",
+      "notes": "## Variational Autoencoders\n\n### Training results\n\nAdam optimizer; 3 epochs; batch size 32.\n\n| Epoch | Training loss |\n| --- | --- |\n| 1 | 4.0 |\n| 2 | 2.56 |\n| 3 | 1.6384 |\n\nTraining loss decreases; no validation result is shown.",
+      "literal_checks": ["batch size 32", "1.6384", "no validation result is shown"]
+    },
+    {
+      "id": "thanks-page",
+      "source": "Thank you!\nQuestions?",
+      "non_content": true,
+      "notes": "<!-- noteagent:non-content -->",
+      "literal_checks": []
+    },
+    {
+      "id": "scanned-diagram",
+      "source": "Three-layer Network\nInput -> Hidden -> Output\nThe diagram has two input nodes, two hidden nodes and one output node.\nEvery input node connects to each hidden node. Both hidden nodes connect to the output.\nAll arrows point from input toward output.",
+      "image_only": true,
+      "notes": "## Network Structure\n\nThe network has two input nodes, two hidden nodes and one output node. Every input connects to both hidden nodes; both hidden nodes connect to the output. Signals flow from input through hidden to output.",
+      "literal_checks": ["two input nodes", "two hidden nodes", "one output node"]
+    }
+  ],
+  "heading_counts": {"## Variational Autoencoders": 1, "## Network Structure": 1},
+  "occurrence_checks": {"A variational autoencoder represents each input with a latent distribution.": 1},
+  "excluded_text": ["MNIST DIGITS", "time=6s", "step=4ms", "dense_23", "The slide shows", "The page contains"],
+  "manual_review": [
+    "Each concept starts with its definition or conclusion; there is no cover/demo-page narration.",
+    "Related pages share a concept heading; a repeated introduction is merged while new worked steps remain.",
+    "The source sampling code is unchanged and its log-variance inconsistency is flagged outside the code.",
+    "Keep useful training configuration and loss values without claiming validation quality or loss-term balance.",
+    "Diagram notes keep node counts, connectivity and direction without listing colors, panel positions or ticks.",
+    "Non-content pages remain accounted for and reviewable without marker text in Markdown, Notebook or Notion."
+  ]
+}

@@ -64,7 +64,13 @@ The app sends extracted text and page images to your selected model in groups of
 
 Resuming reads document text for context but skips image rendering for accepted pages. A fully cached PPTX run also skips LibreOffice conversion. The original page numbers, cache rules and model request contents are preserved.
 
-Each group receives a bounded local outline and previously accepted topic names to keep organization consistent. Export joins adjacent identical topic headings while retaining the original page records. This adds no extra model request or full-document rewrite. Prompt changes invalidate generation caches for new tasks; existing notes and exports remain available.
+The default style puts definitions, rules and conclusions first, followed by the necessary mechanism, assumptions, formulas and worked examples. Comparisons can use compact tables. Diagram explanations focus on relationships and findings; incidental timing logs, generated layer-name inventories and page narration are omitted. Visible source code is preserved exactly. A clear conflict between source code and its stated definitions should receive a short **Source check**, rather than a silent code change; this is a generation instruction, not a formal code or math validator.
+
+Clearly blank pages and pages containing only a cover, outline, biography, decorative quote, thank-you or demo title are still recorded as processed, but do not add filler to the notes. Actionable course requirements are kept briefly. **More → Review sources** remains available for processed pages without note text. If every reviewed page is marked as having no study content, the export says so; unreadable pages must be identified rather than silently omitted.
+
+Each group receives a bounded local outline and previously accepted topic names. Local export joins adjacent identical topic headings and removes an exact repeated introductory paragraph when the same topic continues. Distinct explanations, subtopics, later revisits, math, tables and code are preserved; the app does not guess semantic equivalence. This adds no extra model request or full-document rewrite. Prompt changes invalidate generation caches for new tasks; existing notes, revisions and exports remain available and published Notion pages are not rewritten.
+
+For prompt editing, the default OpenRouter/cloud flow uses **`prompts/segment_system.md`**. The **`vision_*`** and **`generation_*`** templates serve the older compatible page-analysis flow; editing those alone does not change the default cloud requests.
 
 The language control applies to new generation. Re-exporting saved notes changes their format or source references; it does not translate them.
 
@@ -293,6 +299,16 @@ Build fixed English material and run offline fidelity checks:
 ```
 
 The versioned PDF includes a definition, a continuing worked example, code with numeric literals and blank lines, and an image-only network diagram. `dev_artifacts/english-quality/review.json` records mechanical checks and a manual checklist for future live runs. Its responses are fixed fixtures: **model quality is not assessed**. The script reads no API keys and makes no network requests.
+
+Check the concise-note handling with a separate seven-page fixture:
+
+```bash
+.venv/bin/python scripts/quality_baseline.py \
+  --fixture tests/fixtures/note_style.json \
+  --output-dir dev_artifacts/note-style
+```
+
+This checks that non-content pages remain accounted for, exact repeated introductions merge, worked steps and source code survive, a source inconsistency stays flagged, exports contain no internal receipts, and a cached rerun sends no inference. These are **fixed offline responses**, not evidence that a live model follows the new style. A future live review should check relevance and concision against the source as well as formulas, code fidelity and omissions.
 
 Run a document acceptance check with mock model responses:
 
