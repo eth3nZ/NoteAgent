@@ -583,7 +583,7 @@ class ResponsiveUITests(unittest.TestCase):
                'shared_tasks':1,'protected_reason':''}
         info = {'cache_bytes':2048,'reclaimable_bytes':0,'retention_days':30,'tasks':[row]}
         cleaned = {**info,'cache_bytes':0,'removed_bytes':2048,
-                   'tasks':[{**row,'body_bytes':0,'shared_bytes':0,'protected_reason':'No cached content'}]}
+                   'tasks':[],'cleared_task_ids':['fixture']}
         changed = []
         dialog.cache_changed.connect(lambda:changed.append(True))
         def delayed_info(*args):
@@ -615,6 +615,7 @@ class ResponsiveUITests(unittest.TestCase):
             self.assertEqual(clean.call_args.args[1],['fixture'])
             self.assertEqual(changed,[True])
             self.assertIn('0 B',dialog.cache_summary.text())
+            self.assertEqual(dialog.cache_table.rowCount(),0)
             self.assertFalse(dialog.clean_cache_button.isEnabled())
             dialog._show_cache_tasks([row])
             dialog.cache_table.item(0,0).setCheckState(Qt.CheckState.Checked)
@@ -660,7 +661,96 @@ class ResponsiveUITests(unittest.TestCase):
         self.assertEqual(output.read_text(),'# Saved notes')
         self.assertIn('Notion pages are kept',dialog.storage_status.text())
         self.assertEqual(dialog._selected_cache_ids(),[])
+        self.assertEqual([row['id'] for row in dialog._storage_rows],[pending])
         dialog.reject()
+
+    def test_clearing_completed_current_task_hides_cache_and_keeps_opening_saved_notes(self):
+        from app.core.cloud import SegmentResponse
+        saved = self.show_saved_task()
+        output = Path(saved['output_path'])
+        original = output.read_bytes()
+        store = TaskStore(self.window.store_path)
+        task_id = store.create('current','current',saved['options'])
+        request = store.reserve(task_id,'fixture',False,0)
+        notes = {1:'## Topic\n\nA useful fact.',2:'## Topic\n\nA second fact.'}
+        store.commit_response(request,'current',SegmentResponse(notes,'stop','fixture'),True)
+        store.update(task_id,status='completed',page_count=2,markdown='Saved notes',output_path=str(output))
+        def restore():
+            task = store.get(task_id)
+            task.update(notes={page:note for segment in store.segments('current')
+                               for page,note in segment['notes'].items()},cost=store.cost(task_id),revision=None)
+            with patch.object(self.window,'_schedule_estimate'):
+                self.window._restore_previous(task)
+        restore()
+        self.window._cached_tasks_cleared(['another-task'])
+        self.assertIn('Saved notes',self.window.preview.toPlainText())
+        dialog = SettingsDialog(cloud_defaults(),self.window,auto_refresh=False)
+        dialog.cache_cleared.connect(self.window._cached_tasks_cleared)
+        with patch('httpx.Client.send',side_effect=AssertionError('Cleanup must not use the network')):
+            dialog.show()
+            dialog.tabs.setCurrentWidget(dialog.storage_tab)
+            self.spin(lambda:dialog.worker is None)
+            self.assertEqual(dialog.cache_table.rowCount(),1)
+            self.assertEqual(dialog._storage_rows[0]['protected_reason'],'')
+            dialog.cache_table.item(0,0).setCheckState(Qt.CheckState.Checked)
+            self.assertTrue(dialog.clean_cache_button.isEnabled())
+            dialog.clean_cache_button.click()
+            self.spin(lambda:dialog.worker is None)
+            self.assertEqual(dialog.cache_table.rowCount(),0)
+            self.assertFalse(self.window.preview.toPlainText())
+            self.assertFalse(self.window.last_result.completed_pages)
+            self.assertFalse(self.window.export_action.isEnabled())
+            self.assertFalse(self.window.publish_action.isEnabled())
+            self.assertFalse(self.window.edit_action.isVisible())
+            self.assertFalse(self.window.progress_bar.isVisible())
+            self.assertEqual(self.window.generate_button.text(),'Open notes')
+            with patch('app.ui.main_window.QDesktopServices.openUrl',return_value=True) as opened, \
+                 patch.object(self.window,'_launch') as launch:
+                self.window.generate_button.click()
+            opened.assert_called_once()
+            launch.assert_not_called()
+            dialog._load_storage()
+            self.spin(lambda:dialog.worker is None)
+            self.assertEqual(dialog.cache_table.rowCount(),0)
+            self.assertIn('No cached tasks',dialog.storage_status.text())
+        dialog.reject()
+        restore()
+        self.assertIn('local cache cleared',self.window.status.text())
+        self.assertEqual(self.window.generate_button.text(),'Open notes')
+        self.assertFalse(self.window.export_action.isEnabled())
+        self.assertEqual(output.read_bytes(),original)
+        self.assertEqual(store.get(task_id)['status'],'completed')
+
+        # Closing after the transaction commits must still invalidate the in-memory notes.
+        request = store.reserve(task_id,'fixture',False,0)
+        store.commit_response(request,'current',SegmentResponse(notes,'stop','fixture'),True)
+        store.update(task_id,markdown='Saved notes')
+        restore()
+        from app.core.maintenance import clean_selected_storage
+        committed = []
+        def committed_cleanup(path,tasks,protected,cancel):
+            result = clean_selected_storage(path,tasks,protected)
+            committed.append(True)
+            for _ in range(100):
+                if cancel():
+                    break
+                time.sleep(.005)
+            return result
+        dialog = SettingsDialog(cloud_defaults(),self.window,auto_refresh=False)
+        dialog.cache_cleared.connect(self.window._cached_tasks_cleared)
+        with patch('app.ui.settings.clean_selected_storage',side_effect=committed_cleanup):
+            dialog.show()
+            dialog.tabs.setCurrentWidget(dialog.storage_tab)
+            self.spin(lambda:dialog.worker is None)
+            dialog.cache_select_all.click()
+            dialog.clean_cache_button.click()
+            self.spin(lambda:bool(committed))
+            dialog.reject()
+            self.spin(lambda:dialog.worker is None)
+            self.spin(lambda:not dialog.isVisible())
+        self.assertFalse(self.window.preview.toPlainText())
+        self.assertFalse(self.window.export_action.isEnabled())
+        self.assertEqual(self.window.generate_button.text(),'Open notes')
 
     def test_preview_batches_and_preserves_user_scroll(self):
         self.window.preview.setPlainText("\n".join(f"line {n}" for n in range(500)))

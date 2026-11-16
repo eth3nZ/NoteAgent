@@ -202,7 +202,7 @@ class TaskStore:
         for key, members in groups.items():
             if any(task['status'] == 'running' for task in members):
                 reason = 'Generation in progress'
-            elif any(task['id'] == protect_task_id for task in members):
+            elif any(task['id'] == protect_task_id and task['status'] != 'completed' for task in members):
                 reason = 'Current task'
             elif key in uncertain:
                 reason = 'Unresolved paid request'
@@ -238,7 +238,8 @@ class TaskStore:
                     'updated': task['updated'], 'status': task['status'], 'page_count': task['page_count'],
                     'body_bytes': body_bytes, 'shared_bytes': shared_bytes, 'shared_tasks': len(members),
                     'protected_reason': reason if body_bytes or shared_bytes else 'No cached content'}
-        return [records[task['id']] for task in tasks]
+        return [records[task['id']] for task in tasks
+                if records[task['id']]['body_bytes'] or records[task['id']]['shared_bytes']]
 
     def cache_tasks(self, protect_task_id=None):
         with self._db() as db:
@@ -252,7 +253,10 @@ class TaskStore:
             db.execute('BEGIN IMMEDIATE')
             if db.execute("SELECT 1 FROM tasks WHERE status='running' LIMIT 1").fetchone():
                 raise TaskBusy('Wait for the current task before cleaning its cache')
-            plan = selected_cache_plan(self._cache_tasks(db, protect_task_id), task_ids)
+            rows = self._cache_tasks(db, protect_task_id)
+            plan = selected_cache_plan(rows, task_ids)
+            selected = set(plan['task_ids'])
+            selected_rows = {task['id']: task for task in rows if task['id'] in selected}
             deleted_segments = 0
             for key in plan['cache_keys']:
                 if cancel_callback and cancel_callback():
@@ -266,8 +270,11 @@ class TaskStore:
                 raise ValueError('Cache cleanup cancelled')
         if plan['reclaimable_bytes']:
             self._compact_cache(cancel_callback)
+        cleared = [task_id for task_id, task in selected_rows.items()
+                   if not task['shared_bytes'] or task['cache_key'] in plan['cache_keys']]
         return {'removed_bytes': plan['reclaimable_bytes'], 'removed_segments': deleted_segments,
-                'selected_tasks': len(plan['task_ids']), 'shared_retained': plan['shared_retained']}
+                'selected_tasks': len(plan['task_ids']), 'shared_retained': plan['shared_retained'],
+                'cleared_task_ids': cleared}
 
     def _compact_cache(self, cancel_callback=None):
         # Freed pages stay reusable if another reader or cancellation prevents compaction.

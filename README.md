@@ -226,11 +226,13 @@ Environment variables remain supported and are never copied into Keychain or JSO
 
 The app performs conservative cache cleanup in the background at startup. For manual cleanup:
 
-1. Open **Settings → Storage**. The list shows each task's document, last-used time, page count, status and cache size.
+1. Open **Settings → Storage**. The list shows tasks that still have cached content, with document, last-used time, page count, status and size. Fully cleared tasks disappear from this list; their history and fee records remain saved.
 2. Check completed tasks, or use **Select available**. Recent completed caches can be cleared manually; they do not need to reach the automatic 30-day limit.
 3. Review the estimated space, then choose **Clear selected cache**. The list refreshes after cleanup. Use the refresh icon to reload it later.
 
-Protected rows explain why they cannot be selected: the current task, unfinished work, pending Notion retries, unresolved paid requests, saved human revisions or a cache with no surviving local export. Protection also applies to tasks sharing that cache. The app checks these conditions again before making any change.
+Protected rows explain why they cannot be selected: unfinished work, pending Notion retries, unresolved paid requests, saved human revisions or a cache with no surviving local export. Protection also applies to tasks sharing that cache. A completed current task can be cleared manually when those checks pass; automatic startup maintenance still retains the latest/current task. The app checks these conditions again before making any change.
+
+Clearing the current task also clears its in-app preview and disables actions that need cached notes. **Open notes** still opens its saved export. Source documents and published Notion notes remain available; this does not trigger regeneration or publishing.
 
 Several tasks can share page results, for example when the same generation is exported in different formats. Row sizes include that shared data; **the selection estimate counts it only once**. Selecting some of those tasks clears their own cached bodies while keeping shared page results for the unselected tasks. Select every related task to clear the shared data too. Displayed sizes measure cached content, not exact disk space; SQLite can reuse freed space even when its file cannot immediately shrink.
 

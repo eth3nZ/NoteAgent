@@ -717,7 +717,7 @@ class MainWindow(QMainWindow):
                                                  result.reason in {"notion_failed", "notion_setup"})))
         self.publish_action.setText("Retry Notion" if result and result.reason == "notion_failed" else
                                         'Send revision' if result and result.notion and result.revision_id != result.published_revision_id else "Send to Notion")
-        self.publish_action.setEnabled(not busy)
+        self.publish_action.setEnabled(not busy and has_notes)
         self.reconcile_action.setVisible(bool(result and result.reason in {"uncertain_cost", "interrupted"} and action != "reconcile"))
         self.reconcile_action.setEnabled(not busy)
         self.open_file_action.setVisible(bool(result and result.output_path and os.path.isfile(result.output_path) and action != "open"))
@@ -745,7 +745,8 @@ class MainWindow(QMainWindow):
         self._update_notion_state()
         self._sync_refresh_state()
         self.activity.set_running(busy, busy and self.worker.isInterruptionRequested())
-        self.progress_bar.setVisible(busy or bool(result and result.page_count))
+        self.progress_bar.setVisible(busy or bool(result and result.page_count and
+                                                 (result.status != 'completed' or has_notes)))
         if result and result.page_count:
             self.progress_bar.setRange(0, result.page_count)
             self.progress_bar.setValue(len(result.completed_pages))
@@ -1026,6 +1027,8 @@ class MainWindow(QMainWindow):
                         "interrupted": "Previous session interrupted; resume saved progress", "cancelled": "Cancelled; completed pages saved"}
         detail = descriptions.get(result.reason, result.reason.replace("_", " "))
         text = f"{result.status.replace('_', ' ').title()} · {len(result.completed_pages)}/{result.page_count} pages · ${result.cost_usd:.6f} spent/reserved"
+        if result.status == 'completed' and not result.completed_pages and not result.revision_id:
+            text = f"Completed · local cache cleared · ${result.cost_usd:.6f} spent/reserved"
         if detail:
             text += f"\n{detail}"
         if result.retry_at:
@@ -1109,6 +1112,7 @@ class MainWindow(QMainWindow):
         self._save_config()
         dialog = SettingsDialog(self._config, self, settings_store=self.settings_store)
         dialog.cache_changed.connect(self._schedule_estimate)
+        dialog.cache_cleared.connect(self._cached_tasks_cleared)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._config.update(dialog.saved_result.config)
             self._settings_notice = dialog.saved_result.notice
@@ -1117,6 +1121,14 @@ class MainWindow(QMainWindow):
             self._render_state()
             self._schedule_estimate(refresh=True)
         dialog.deleteLater()
+
+    def _cached_tasks_cleared(self, task_ids):
+        if not self.last_result or self.task_id not in task_ids:
+            return
+        self.last_result.completed_pages = []
+        self._clear_preview()
+        self._on_state(self.last_result)
+        self.status.setText('Local cache cleared. Open the saved file to read your notes. Notion pages are kept.')
 
     def _update_notion_state(self):
         self.notion_mode.setEnabled(self.publish_notion.isChecked() and not self._busy())

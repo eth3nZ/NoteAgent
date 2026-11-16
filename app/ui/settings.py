@@ -99,6 +99,7 @@ QTabBar::tab:selected { color: #2F5545; border-bottom: 2px solid #2F5545; }
 
 class SettingsDialog(QDialog):
     cache_changed = pyqtSignal()
+    cache_cleared = pyqtSignal(object)
 
     def __init__(self, config, parent=None, auto_refresh=True, settings_store=None):
         super().__init__(parent)
@@ -111,6 +112,7 @@ class SettingsDialog(QDialog):
         self.settings_store = settings_store
         self.saved_result = None
         self._saving = False
+        self._deliver_on_close = False
         self._edited_secrets = set()
         self._key_origin = credential_origin(config)
         self.worker = None
@@ -586,15 +588,17 @@ class SettingsDialog(QDialog):
         def loaded(info):
             self.cache_summary.setText(f"Cached notes: {format_bytes(info['cache_bytes'])}")
             rows = info.get('tasks', [])
-            self.cache_reclaimable.setText(f"{len(rows)} tasks · auto-cleanup ({info['retention_days']} days): {format_bytes(info['reclaimable_bytes'])}")
+            self.cache_reclaimable.setText(f"{len(rows)} cached tasks · auto-cleanup ({info['retention_days']} days): {format_bytes(info['reclaimable_bytes'])}")
             self._show_cache_tasks(rows)
             if clean:
                 self.storage_status.setText(f"Cleared {format_bytes(info['removed_bytes'])}. Exported notes and Notion pages are kept.")
                 self._select_available_caches(False)
+                if info.get('cleared_task_ids'):
+                    self.cache_cleared.emit(info['cleared_task_ids'])
                 self.cache_changed.emit()
             else:
-                self.storage_status.setText('Regenerating may use requests again. Protected rows explain why they are kept.' if rows else 'No saved tasks yet.')
-        self._start_operation(operation, loaded, self.storage_status.setText)
+                self.storage_status.setText('Regenerating may use requests again. Protected rows explain why they are kept.' if rows else 'No cached tasks. Exported files and Notion pages are kept.')
+        self._start_operation(operation, loaded, self.storage_status.setText, deliver_on_close=clean)
 
     def _load_catalog(self, paid=False, force=False):
         if self._disposed or self._closing or (not paid and self.provider.currentData() != "openrouter"):
@@ -667,11 +671,12 @@ class SettingsDialog(QDialog):
             credential_origin(result, key) == credential_origin(self._config, key))
         return result
 
-    def _start_operation(self, operation, handler, error_handler):
+    def _start_operation(self, operation, handler, error_handler, deliver_on_close=False):
         if self.worker is not None or self._disposed:
             return
         self._operation_handler = handler
         self._error_handler = error_handler
+        self._deliver_on_close = deliver_on_close
         self.worker = TaskWorker(operation, self)
         self.worker.result.connect(self._receive_result)
         self.worker.failed.connect(self._receive_error)
@@ -680,7 +685,7 @@ class SettingsDialog(QDialog):
         self._update_controls()
 
     def _receive_result(self, result):
-        if not self._closing or self._saving:
+        if not self._closing or self._saving or self._deliver_on_close:
             self._operation_handler(result)
 
     def _receive_error(self, message):
