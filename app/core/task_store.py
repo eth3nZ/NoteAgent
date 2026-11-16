@@ -25,6 +25,33 @@ def micros(usd):
     return math.ceil(value * 1_000_000)
 
 
+def selected_cache_plan(tasks, task_ids):
+    """Plan from metadata only. Shared segments need every referencing task selected."""
+    selected = set(task_ids)
+    by_id = {task['id']: task for task in tasks}
+    if selected - by_id.keys():
+        raise ValueError("A selected task is no longer available. Refresh the list.")
+    for task_id in selected:
+        if by_id[task_id]['protected_reason']:
+            raise ValueError("Selected cache is protected: " + by_id[task_id]['protected_reason'])
+    groups = {}
+    for task in tasks:
+        groups.setdefault(task['cache_key'], []).append(task)
+    body_ids = sorted(task_id for task_id in selected if by_id[task_id]['body_bytes'])
+    keys, shared_bytes, shared_retained = [], 0, False
+    for key, members in groups.items():
+        if not any(task['id'] in selected for task in members) or not members[0]['shared_bytes']:
+            continue
+        if all(task['id'] in selected for task in members):
+            keys.append(key)
+            shared_bytes += members[0]['shared_bytes']
+        else:
+            shared_retained = True
+    return {'task_ids': sorted(selected), 'body_ids': body_ids, 'cache_keys': keys,
+            'reclaimable_bytes': sum(by_id[task_id]['body_bytes'] for task_id in body_ids) + shared_bytes,
+            'shared_retained': shared_retained}
+
+
 class TaskStore:
     CACHE_RETENTION_DAYS = 30
     def __init__(self, path=None, clock=time.time):
@@ -159,6 +186,99 @@ class TaskStore:
                 'expired_groups':len(plan['expired_keys']), 'duplicate_bodies':plan['duplicate_bodies'],
                 'database_bytes':self.path.stat().st_size, 'retention_days':retention_days}
 
+    def _cache_tasks(self, db, protect_task_id=None):
+        """Return small UI records without loading note bodies or credentials."""
+        tasks = [self._task(row) for row in db.execute("""SELECT id,cache_key,options,status,reason,
+            page_count,updated,output_path,length(CAST(markdown AS BLOB)) AS body_bytes
+            FROM tasks ORDER BY updated DESC,id""")]
+        shared = dict(db.execute("SELECT cache_key,sum(length(CAST(notes AS BLOB))) FROM segments GROUP BY cache_key"))
+        uncertain = {row[0] for row in db.execute("""SELECT DISTINCT t.cache_key FROM requests r
+            JOIN tasks t ON t.id=r.task_id WHERE r.paid=1 AND r.state IN ('reserved','uncertain')""")}
+        revised = {row[0] for row in db.execute("SELECT DISTINCT t.cache_key FROM revisions r JOIN tasks t ON t.id=r.task_id")}
+        groups = {}
+        for task in tasks:
+            groups.setdefault(task['cache_key'], []).append(task)
+        records = {}
+        for key, members in groups.items():
+            if any(task['status'] == 'running' for task in members):
+                reason = 'Generation in progress'
+            elif any(task['id'] == protect_task_id for task in members):
+                reason = 'Current task'
+            elif key in uncertain:
+                reason = 'Unresolved paid request'
+            elif key in revised:
+                reason = 'Saved human revision'
+            elif any(task['options'].get('publication_state') in {'sending', 'uncertain'} or
+                     task['reason'] in {'notion_setup', 'notion_failed'} for task in members):
+                reason = 'Notion retry pending'
+            elif any(task['status'] != 'completed' for task in members):
+                reason = 'Unfinished task'
+            elif any(task['reason'] for task in members):
+                reason = 'Task needs attention'
+            else:
+                reason = ''
+            saved = False
+            if not reason:
+                for task in members:
+                    try:
+                        path = Path(task['output_path'])
+                        if task['output_path'] and path.is_file() and path.stat().st_size:
+                            saved = True
+                            break
+                    except OSError:
+                        pass
+                if not saved:
+                    reason = 'No saved local export'
+            for task in members:
+                body_bytes, shared_bytes = task['body_bytes'], shared.get(key, 0)
+                records[task['id']] = {
+                    'id': task['id'], 'cache_key': key,
+                    'document': Path(task['options'].get('input_path', '')).name or task['options'].get('title', 'Untitled'),
+                    'detail': f"{task['options'].get('language', 'en').upper()} · {task['options'].get('output_format', 'md').upper()}",
+                    'updated': task['updated'], 'status': task['status'], 'page_count': task['page_count'],
+                    'body_bytes': body_bytes, 'shared_bytes': shared_bytes, 'shared_tasks': len(members),
+                    'protected_reason': reason if body_bytes or shared_bytes else 'No cached content'}
+        return [records[task['id']] for task in tasks]
+
+    def cache_tasks(self, protect_task_id=None):
+        with self._db() as db:
+            return self._cache_tasks(db, protect_task_id)
+
+    def clean_selected_cache(self, task_ids, protect_task_id=None, cancel_callback=None):
+        """Clear only selected cache, never history, revisions, files or publication metadata."""
+        with self._db() as db:
+            if cancel_callback:
+                db.set_progress_handler(lambda: int(cancel_callback()), 1000)
+            db.execute('BEGIN IMMEDIATE')
+            if db.execute("SELECT 1 FROM tasks WHERE status='running' LIMIT 1").fetchone():
+                raise TaskBusy('Wait for the current task before cleaning its cache')
+            plan = selected_cache_plan(self._cache_tasks(db, protect_task_id), task_ids)
+            deleted_segments = 0
+            for key in plan['cache_keys']:
+                if cancel_callback and cancel_callback():
+                    raise ValueError('Cache cleanup cancelled')
+                deleted_segments += db.execute('DELETE FROM segments WHERE cache_key=?', (key,)).rowcount
+            for task_id in plan['body_ids']:
+                if cancel_callback and cancel_callback():
+                    raise ValueError('Cache cleanup cancelled')
+                db.execute("UPDATE tasks SET markdown='' WHERE id=?", (task_id,))
+            if cancel_callback and cancel_callback():
+                raise ValueError('Cache cleanup cancelled')
+        if plan['reclaimable_bytes']:
+            self._compact_cache(cancel_callback)
+        return {'removed_bytes': plan['reclaimable_bytes'], 'removed_segments': deleted_segments,
+                'selected_tasks': len(plan['task_ids']), 'shared_retained': plan['shared_retained']}
+
+    def _compact_cache(self, cancel_callback=None):
+        # Freed pages stay reusable if another reader or cancellation prevents compaction.
+        try:
+            with self._db() as db:
+                if cancel_callback:
+                    db.set_progress_handler(lambda: int(cancel_callback()), 1000)
+                db.execute('VACUUM')
+        except sqlite3.OperationalError:
+            pass
+
     def clean_cache(self, retention_days=CACHE_RETENTION_DAYS, protect_task_id=None, cancel_callback=None):
         """Remove expired completed content and duplicate bodies; retain task/charge history."""
         with self._db() as db:
@@ -175,14 +295,7 @@ class TaskStore:
             for task_id in plan['body_ids']:
                 db.execute("UPDATE tasks SET markdown='' WHERE id=?", (task_id,))
         if plan['reclaimable_bytes']:
-            # SQLite may reuse freed pages even if another reader prevents compaction.
-            try:
-                with self._db() as db:
-                    if cancel_callback:
-                        db.set_progress_handler(lambda: int(cancel_callback()), 1000)
-                    db.execute("VACUUM")
-            except sqlite3.OperationalError:
-                pass
+            self._compact_cache(cancel_callback)
         result = self.cache_info(retention_days, protect_task_id)
         result.update(removed_bytes=plan['reclaimable_bytes'], removed_segments=deleted_segments,
                       compacted_bodies=plan['duplicate_bodies'])

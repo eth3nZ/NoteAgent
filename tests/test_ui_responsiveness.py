@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QPushButton
 from PyQt6.QtWidgets import QMessageBox
@@ -578,21 +578,25 @@ class ResponsiveUITests(unittest.TestCase):
 
     def test_storage_check_and_cleanup_run_in_background_and_close_safely(self):
         dialog = SettingsDialog(cloud_defaults(), self.window, auto_refresh=False)
-        info = {'cache_bytes':2048,'reclaimable_bytes':1024,'retention_days':30}
-        cleaned = {**info,'cache_bytes':1024,'reclaimable_bytes':0,'removed_bytes':1024,'removed_workspaces':0}
+        row = {'id':'fixture','cache_key':'cache','document':'Lecture.pdf','updated':time.time(),
+               'status':'completed','page_count':8,'body_bytes':1024,'shared_bytes':1024,
+               'shared_tasks':1,'protected_reason':''}
+        info = {'cache_bytes':2048,'reclaimable_bytes':0,'retention_days':30,'tasks':[row]}
+        cleaned = {**info,'cache_bytes':0,'removed_bytes':2048,
+                   'tasks':[{**row,'body_bytes':0,'shared_bytes':0,'protected_reason':'No cached content'}]}
         changed = []
         dialog.cache_changed.connect(lambda:changed.append(True))
         def delayed_info(*args):
             time.sleep(.1)
             return info
-        def delayed_clean(path,task,cancel):
+        def delayed_clean(path,tasks,protected,cancel):
             for _ in range(10):
                 if cancel():
                     break
                 time.sleep(.01)
             return cleaned
         with patch('app.ui.settings.storage_info',side_effect=delayed_info), \
-             patch('app.ui.settings.clean_storage',side_effect=delayed_clean):
+             patch('app.ui.settings.clean_selected_storage',side_effect=delayed_clean) as clean:
             dialog.show()
             dialog.tabs.setCurrentWidget(dialog.storage_tab)
             self.assertIsNotNone(dialog.worker)
@@ -601,15 +605,62 @@ class ResponsiveUITests(unittest.TestCase):
             self.assertLess(time.monotonic()-before,.2)
             self.spin(lambda:dialog.worker is None)
             self.assertIn('2.0 KB',dialog.cache_summary.text())
+            self.assertFalse(dialog.clean_cache_button.isEnabled())
+            dialog.cache_table.item(0,0).setCheckState(Qt.CheckState.Checked)
+            self.assertIn('2.0 KB',dialog.cache_selection.text())
+            dialog.clean_cache_button.click()
             dialog.clean_cache_button.click()
             self.spin(lambda:dialog.worker is None)
+            self.assertEqual(clean.call_count,1)
+            self.assertEqual(clean.call_args.args[1],['fixture'])
             self.assertEqual(changed,[True])
-            self.assertIn('1.0 KB',dialog.cache_summary.text())
+            self.assertIn('0 B',dialog.cache_summary.text())
+            self.assertFalse(dialog.clean_cache_button.isEnabled())
+            dialog._show_cache_tasks([row])
+            dialog.cache_table.item(0,0).setCheckState(Qt.CheckState.Checked)
             dialog.clean_cache_button.click()
             dialog.reject()
             self.assertTrue(dialog._closing)
             self.spin(lambda:dialog.worker is None)
             self.spin(lambda:not dialog.isVisible())
+
+    def test_storage_selection_keeps_protected_and_shared_data_and_never_publishes(self):
+        store = TaskStore(self.window.store_path)
+        output = Path(self.temp.name)/'Saved.md'
+        output.write_text('# Saved notes')
+        def task(key, status='completed'):
+            task_id = store.create(key,key,{'input_path':key+'.pdf'})
+            store.update(task_id,status=status,page_count=1,markdown='# '+key,output_path=str(output))
+            return task_id
+        first = task('shared')
+        second = task('shared')
+        pending = task('unfinished','paused')
+        with store._db() as db:
+            db.execute('INSERT INTO segments VALUES(?,?,?,?,?,?)',
+                       ('shared',1,1,json.dumps({'1':'A shared fact.'}),'fixture','fixture'))
+        dialog = SettingsDialog(cloud_defaults(),self.window,auto_refresh=False)
+        with patch('httpx.Client.send',side_effect=AssertionError('Cleanup must not use the network')):
+            dialog.show()
+            dialog.tabs.setCurrentWidget(dialog.storage_tab)
+            self.spin(lambda:dialog.worker is None)
+            indices = {row['id']:index for index,row in enumerate(dialog._storage_rows)}
+            self.assertIn('Unfinished task',dialog.cache_table.item(indices[pending],4).text())
+            self.assertFalse(dialog.cache_table.item(indices[pending],0).flags() & Qt.ItemFlag.ItemIsEnabled)
+            dialog.cache_table.item(indices[first],0).setCheckState(Qt.CheckState.Checked)
+            self.assertIn('shared pages kept',dialog.cache_selection.text())
+            dialog.cache_select_all.click()
+            self.assertEqual(set(dialog._selected_cache_ids()),{first,second})
+            self.assertNotIn('shared pages kept',dialog.cache_selection.text())
+            dialog.clean_cache_button.click()
+            self.spin(lambda:dialog.worker is None)
+        self.assertFalse(store.get(first)['markdown'])
+        self.assertFalse(store.get(second)['markdown'])
+        self.assertTrue(store.get(pending)['markdown'])
+        self.assertFalse(store.segments('shared'))
+        self.assertEqual(output.read_text(),'# Saved notes')
+        self.assertIn('Notion pages are kept',dialog.storage_status.text())
+        self.assertEqual(dialog._selected_cache_ids(),[])
+        dialog.reject()
 
     def test_preview_batches_and_preserves_user_scroll(self):
         self.window.preview.setPlainText("\n".join(f"line {n}" for n in range(500)))

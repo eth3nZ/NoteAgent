@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -10,10 +11,11 @@ from unittest.mock import patch
 import pymupdf
 
 from app.core.cloud import SegmentResponse
-from app.core.maintenance import WORKSPACE_MARKER, clean_stale_workspaces, create_workspace
+from app.core.maintenance import (WORKSPACE_MARKER, clean_selected_storage, clean_stale_workspaces,
+                                  create_workspace, storage_info)
 from app.core.notion import NotionPublishResult
 from app.core.pipeline import Pipeline
-from app.core.task_store import BudgetExceeded, TaskBusy, TaskStore
+from app.core.task_store import BudgetExceeded, TaskBusy, TaskStore, selected_cache_plan
 
 
 class CacheMaintenanceTests(unittest.TestCase):
@@ -140,6 +142,117 @@ class CacheMaintenanceTests(unittest.TestCase):
         self.store.clean_cache()
         self.assertTrue(self.store.get(old)['markdown'])
         self.assertTrue(self.store.segments('shared'))
+
+    def test_selected_recent_cache_keeps_files_publication_metadata_history_and_ledger(self):
+        chosen = self.task('recent', paid=True)
+        untouched = self.task('other')
+        task = self.store.get(chosen)
+        task['options'].update(published_signature='already-published', publication_state='sent',
+                               notion_page_id='0123456789abcdef0123456789abcdef')
+        self.store.update(chosen, options=task['options'])
+        before = self.store.get(chosen)
+        other = self.store.get(untouched)
+        ledger = self.ledger()
+        output = Path(before['output_path'])
+        saved = output.read_bytes()
+        source = self.root/'original.pdf'
+        source.write_bytes(b'original document remains untouched')
+        with patch('httpx.Client.send', side_effect=AssertionError('Cleanup must not use the network')):
+            info = storage_info(self.store.path)
+            self.assertEqual({row['id'] for row in info['tasks']}, {chosen, untouched})
+            result = clean_selected_storage(self.store.path, [chosen])
+        self.assertGreater(result['removed_bytes'], 0)
+        self.assertEqual(self.store.get(chosen), {**before, 'markdown':''})
+        self.assertEqual(self.store.get(untouched), other)
+        self.assertTrue(self.store.segments('other'))
+        self.assertFalse(self.store.segments('recent'))
+        self.assertEqual(output.read_bytes(), saved)
+        self.assertEqual(source.read_bytes(), b'original document remains untouched')
+        self.assertEqual(self.ledger(), ledger)
+        self.assertEqual(self.store.cost(chosen), .01)
+
+    def test_selected_shared_cache_counts_bytes_once_and_keeps_unselected_task_data(self):
+        first = self.task('shared', age=2)
+        second = self.task('shared', age=1)
+        rows = self.store.cache_tasks()
+        by_id = {row['id']:row for row in rows}
+        one = selected_cache_plan(rows, [first])
+        self.assertEqual(one['reclaimable_bytes'], by_id[first]['body_bytes'])
+        self.assertTrue(one['shared_retained'])
+        self.assertEqual(one['cache_keys'], [])
+        both = selected_cache_plan(rows, [first, second, first])
+        self.assertEqual(both['reclaimable_bytes'],
+                         by_id[first]['body_bytes'] + by_id[second]['body_bytes'] + by_id[first]['shared_bytes'])
+        self.assertFalse(both['shared_retained'])
+        self.store.clean_selected_cache([first])
+        self.assertFalse(self.store.get(first)['markdown'])
+        self.assertTrue(self.store.get(second)['markdown'])
+        self.assertTrue(self.store.segments('shared'))
+        remaining = self.store.clean_selected_cache([first, second])
+        self.assertGreater(remaining['removed_bytes'], 0)
+        self.assertFalse(self.store.segments('shared'))
+        self.assertTrue(all(row['protected_reason'] == 'No cached content' for row in self.store.cache_tasks()))
+
+    def test_selection_lists_and_enforces_protection_for_every_shared_task(self):
+        pinned = self.task('pinned')
+        sibling = self.task('pinned')
+        revision = self.task('revision')
+        self.store.save_revision(revision, '# Edited notes')
+        pending = self.task('notion', reason='notion_failed')
+        waiting = self.task('unfinished', status='waiting_quota')
+        uncertain = self.task('uncertain', paid=True)
+        request = self.store.reserve(uncertain, 'model', True, .01)
+        self.store.fail_request(request, uncertain=True)
+        no_export = self.task('missing')
+        Path(self.store.get(no_export)['output_path']).unlink()
+        reasons = {row['id']:row['protected_reason'] for row in self.store.cache_tasks(pinned)}
+        self.assertEqual(reasons[pinned], 'Current task')
+        self.assertEqual(reasons[sibling], 'Current task')
+        self.assertEqual(reasons[revision], 'Saved human revision')
+        self.assertEqual(reasons[pending], 'Notion retry pending')
+        self.assertEqual(reasons[waiting], 'Unfinished task')
+        self.assertEqual(reasons[uncertain], 'Unresolved paid request')
+        self.assertEqual(reasons[no_export], 'No saved local export')
+        for task in reasons:
+            with self.subTest(task=task), self.assertRaises(ValueError):
+                self.store.clean_selected_cache([task], protect_task_id=pinned)
+            self.assertTrue(self.store.get(task)['markdown'])
+        self.assertEqual(self.store.latest_revision(revision)['markdown'], '# Edited notes')
+
+    def test_selected_cleanup_revalidates_status_and_export_before_mutating_any_task(self):
+        good = self.task('good')
+        stale = self.task('stale')
+        rows = self.store.cache_tasks()
+        self.assertGreater(selected_cache_plan(rows, [good, stale])['reclaimable_bytes'], 0)
+        self.store.update(stale, status='paused')
+        with self.assertRaises(ValueError):
+            self.store.clean_selected_cache([good, stale])
+        self.assertTrue(self.store.get(good)['markdown'])
+        self.assertTrue(self.store.segments('good'))
+        self.store.update(stale, status='completed')
+        Path(self.store.get(stale)['output_path']).unlink()
+        with self.assertRaises(ValueError):
+            self.store.clean_selected_cache([good, stale])
+        with self.assertRaises(ValueError):
+            self.store.clean_selected_cache([good, 'unknown-task'])
+        self.assertTrue(self.store.get(good)['markdown'])
+
+    def test_selected_cleanup_refuses_running_tasks_and_rolls_back_cancellation(self):
+        good = self.task('good')
+        busy = self.task('busy', status='running')
+        with self.assertRaises(TaskBusy):
+            self.store.clean_selected_cache([good])
+        self.store.update(busy, status='completed')
+        calls = []
+        def cancel():
+            calls.append(True)
+            return len(calls) >= 2
+        with self.assertRaises((ValueError, sqlite3.OperationalError)):
+            self.store.clean_selected_cache([good], cancel_callback=cancel)
+        self.assertTrue(self.store.get(good)['markdown'])
+        self.assertTrue(self.store.segments('good'))
+        empty = self.store.clean_selected_cache([])
+        self.assertEqual(empty['removed_bytes'], 0)
 
     def test_orphan_segments_are_reclaimed(self):
         self.task('current')

@@ -1,6 +1,7 @@
 """Small settings UI with asynchronous catalog loading and explicit paid opt-in."""
 
 import math
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -8,13 +9,15 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QCompleter, QDialog, QDialogButtonBox,
                             QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
                             QPushButton, QSizePolicy, QTabWidget, QVBoxLayout, QWidget,
-                            QFrame, QScrollArea, QStackedWidget, QStyle, QToolButton)
+                            QFrame, QScrollArea, QStackedWidget, QStyle, QToolButton,
+                            QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView)
 
 from app.core.cloud import BASE_URL, FREE_MODEL, list_note_models
 from app.core.configuration import make_client
 from app.core.credentials import SECRET_FIELDS, credential_origin
 from app.core.settings_store import SettingsResult
-from app.core.maintenance import clean_storage, format_bytes, storage_info
+from app.core.maintenance import clean_selected_storage, format_bytes, storage_info
+from app.core.task_store import selected_cache_plan
 from app.ui.workers import TaskWorker
 
 
@@ -85,6 +88,9 @@ QPushButton:disabled, QToolButton:disabled { color: #A0A29B; }
 QToolButton#advancedToggle { border: none; background: transparent; color: #49685A; padding: 8px 0; }
 QToolButton#refreshModels { border: 1px solid #CFCDC5; border-radius: 7px; padding: 8px; background: #FFFEFB; }
 QCheckBox { spacing: 8px; padding: 2px 0; }
+QTableWidget#cacheTasks { color: #20231F; background: #FFFEFB; border: none; }
+QTableWidget#cacheTasks::item { padding: 5px 3px; border-bottom: 1px solid #EEECE6; }
+QHeaderView::section { background: #F4F2ED; color: #73756F; border: none; padding: 6px 3px; font-size: 12px; }
 QTabWidget#settingsTabs::pane { border: none; background: transparent; }
 QTabBar::tab { color: #73756F; padding: 9px 17px; background: transparent; border: none; }
 QTabBar::tab:selected { color: #2F5545; border-bottom: 2px solid #2F5545; }
@@ -113,6 +119,7 @@ class SettingsDialog(QDialog):
         self._pending_catalog = set()
         self._catalog_cache = None
         self._pending_storage = False
+        self._storage_rows = []
         self.store_path = Path(getattr(parent, 'store_path', Path.home()/'.noteagent'/'tasks.sqlite3'))
         self._protected_task_id = getattr(parent, 'task_id', None)
         self._models = {}
@@ -250,30 +257,69 @@ class SettingsDialog(QDialog):
         notion_layout.addWidget(notion_card)
         notion_layout.addStretch()
         self.tabs.addTab(notion_tab, "Notion")
-        self.storage_tab = QWidget()
-        storage_layout = QVBoxLayout(self.storage_tab)
+        self.storage_tab = QScrollArea()
+        self.storage_tab.setObjectName('settingsScroll')
+        self.storage_tab.setFrameShape(QFrame.Shape.NoFrame)
+        self.storage_tab.setWidgetResizable(True)
+        self.storage_tab.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        storage_content = QWidget()
+        storage_content.setObjectName('settingsContent')
+        self.storage_tab.setWidget(storage_content)
+        storage_layout = QVBoxLayout(storage_content)
         storage_layout.setContentsMargins(2, 14, 2, 2)
         storage_layout.setSpacing(12)
         heading = self._label("Local cache")
         heading.setObjectName("settingsHeading")
         storage_layout.addWidget(heading)
-        storage_layout.addWidget(self._label("Old completed caches with saved outputs expire after 30 unused days. The current task, unfinished notes and pending retries are kept."))
+        storage_layout.addWidget(self._label("Select completed tasks. Exported notes and Notion pages are kept."))
         storage_card = self._card()
         cache_layout = QVBoxLayout(storage_card)
         cache_layout.setContentsMargins(16, 14, 16, 14)
+        summary_row = QHBoxLayout()
         self.cache_summary = QLabel("Cached notes: —")
-        cache_layout.addWidget(self.cache_summary)
-        self.cache_reclaimable = self._label("Check reusable and expired notes here.")
+        summary_row.addWidget(self.cache_summary, 1)
+        self.storage_refresh = QToolButton()
+        self.storage_refresh.setObjectName('refreshStorage')
+        self.storage_refresh.setAccessibleName('Refresh cache list')
+        self.storage_refresh.setToolTip('Refresh cache list')
+        self.storage_refresh.setAutoRaise(True)
+        self.storage_refresh.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
+        self.storage_refresh.clicked.connect(lambda: self._load_storage())
+        summary_row.addWidget(self.storage_refresh)
+        cache_layout.addLayout(summary_row)
+        self.cache_reclaimable = self._label("Loading task details…")
         cache_layout.addWidget(self.cache_reclaimable)
-        self.clean_cache_button = QPushButton("Clean unused cache")
-        self.clean_cache_button.setToolTip("Expired caches may need model requests again if you regenerate them. Existing exported files are kept.")
+        self.cache_table = QTableWidget(0, 6)
+        self.cache_table.setObjectName('cacheTasks')
+        self.cache_table.setHorizontalHeaderLabels(['', 'Document', 'Last used', 'Pages', 'Status', 'Cache'])
+        self.cache_table.horizontalHeaderItem(5).setToolTip('Includes shared page data. The selection estimate counts shared data only once.')
+        self.cache_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.cache_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.cache_table.setShowGrid(False)
+        self.cache_table.verticalHeader().hide()
+        self.cache_table.verticalHeader().setDefaultSectionSize(36)
+        self.cache_table.setMinimumHeight(140)
+        header = self.cache_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        for column, width in [(0, 28), (2, 100), (3, 44), (4, 120), (5, 70)]:
+            self.cache_table.setColumnWidth(column, width)
+        self.cache_table.itemChanged.connect(lambda item: self._update_cache_selection() if item.column() == 0 else None)
+        cache_layout.addWidget(self.cache_table, 1)
+        self.cache_select_all = QCheckBox('Select available')
+        self.cache_select_all.clicked.connect(self._select_available_caches)
+        selection_row = QHBoxLayout()
+        selection_row.addWidget(self.cache_select_all)
+        self.cache_selection = self._label('No tasks selected')
+        selection_row.addWidget(self.cache_selection, 1)
+        cache_layout.addLayout(selection_row)
+        self.clean_cache_button = QPushButton("Clear selected cache")
+        self.clean_cache_button.setToolTip("Regenerating cleared content may use model requests again. Exported notes and Notion pages are kept.")
         self.clean_cache_button.clicked.connect(lambda: self._load_storage(clean=True))
         cache_layout.addWidget(self.clean_cache_button, alignment=Qt.AlignmentFlag.AlignLeft)
         self.storage_status = self._label("")
         cache_layout.addWidget(self.storage_status)
-        storage_layout.addWidget(storage_card)
-        storage_layout.addWidget(self._label("Saved human revisions, their source-page notes, exported files, Notion pages and billing history are kept. Old temporary rendering files are removed only after their owning process has exited."))
-        storage_layout.addStretch()
+        storage_layout.addWidget(storage_card, 1)
         self.tabs.addTab(self.storage_tab, "Storage")
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         self.buttons.button(QDialogButtonBox.StandardButton.Save).setObjectName("saveSettings")
@@ -435,7 +481,7 @@ class SettingsDialog(QDialog):
         self.paid_advanced.setEnabled(paid)
         self.paid_refresh.setEnabled(not busy)
         self.test_connection.setEnabled(not busy)
-        self.clean_cache_button.setEnabled(not busy)
+        self._update_cache_selection()
         self.buttons.button(QDialogButtonBox.StandardButton.Save).setEnabled(not busy)
         self.service_help.setText("One OpenRouter key for your models." if openrouter else "Using your custom model service.")
         self.connection_form.labelForField(self.fields["api_key"]).setText("OpenRouter key" if openrouter else "API key")
@@ -461,26 +507,93 @@ class SettingsDialog(QDialog):
         if self.tabs.widget(index) is self.storage_tab:
             self._load_storage()
 
+    def _selected_cache_ids(self):
+        return [row['id'] for index, row in enumerate(self._storage_rows)
+                if not row['protected_reason'] and self.cache_table.item(index, 0).checkState() == Qt.CheckState.Checked]
+
+    def _show_cache_tasks(self, rows):
+        selected = set(self._selected_cache_ids())
+        self._storage_rows = rows
+        self.cache_table.setUpdatesEnabled(False)
+        self.cache_table.blockSignals(True)
+        try:
+            self.cache_table.setRowCount(len(rows))
+            for index, row in enumerate(rows):
+                reason = row['protected_reason']
+                checkbox = QTableWidgetItem()
+                checkbox.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
+                checkbox.setCheckState(Qt.CheckState.Checked if row['id'] in selected and not reason else Qt.CheckState.Unchecked)
+                if reason:
+                    checkbox.setFlags(Qt.ItemFlag.NoItemFlags)
+                self.cache_table.setItem(index, 0, checkbox)
+                size = row['body_bytes'] + row['shared_bytes']
+                tooltip = (f"{reason or 'Available for cleanup'}\nTask: {row['id']}\n"
+                           f"{row.get('detail', '')} · {row['status'].replace('_', ' ')}\n"
+                           f"Last used: {datetime.fromtimestamp(row['updated']).strftime('%Y-%m-%d %H:%M:%S')}\n"
+                           f"Own notes: {format_bytes(row['body_bytes'])}; page cache: {format_bytes(row['shared_bytes'])}"
+                           f" (shared by {row['shared_tasks']} task(s))")
+                values = [row['document'], datetime.fromtimestamp(row['updated']).strftime('%m/%d %H:%M'),
+                          str(row['page_count']), reason or row['status'].replace('_', ' ').capitalize(), format_bytes(size)]
+                checkbox.setToolTip(tooltip)
+                for column, value in enumerate(values, 1):
+                    item = QTableWidgetItem(value)
+                    item.setToolTip(value + '\n' + tooltip)
+                    self.cache_table.setItem(index, column, item)
+        finally:
+            self.cache_table.blockSignals(False)
+            self.cache_table.setUpdatesEnabled(True)
+        self._update_cache_selection()
+
+    def _select_available_caches(self, checked):
+        self.cache_table.blockSignals(True)
+        for index, row in enumerate(self._storage_rows):
+            if not row['protected_reason']:
+                self.cache_table.item(index, 0).setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+        self.cache_table.blockSignals(False)
+        self._update_cache_selection()
+
+    def _update_cache_selection(self):
+        selected = self._selected_cache_ids()
+        plan = selected_cache_plan(self._storage_rows, selected)
+        available = sum(not row['protected_reason'] for row in self._storage_rows)
+        busy = self.worker is not None
+        self.cache_table.setEnabled(not busy)
+        self.storage_refresh.setEnabled(not busy)
+        self.cache_select_all.setEnabled(not busy and available > 0)
+        self.cache_select_all.setChecked(bool(available and len(selected) == available))
+        self.clean_cache_button.setEnabled(not busy and plan['reclaimable_bytes'] > 0)
+        text = f"{len(selected)} selected · about {format_bytes(plan['reclaimable_bytes'])} to clear" if selected else 'No tasks selected'
+        if plan['shared_retained']:
+            text += ' · shared pages kept'
+        self.cache_selection.setText(text)
+        self.cache_selection.setToolTip('Shared page cache is kept for unselected tasks. Select every related task to clear it.' if plan['shared_retained'] else '')
+
     def _load_storage(self, clean=False):
         if self._disposed or self._closing:
             return
         if self.worker is not None:
             self._pending_storage = True
             return
+        selected = self._selected_cache_ids()
+        if clean and not selected:
+            return
         self._pending_storage = False
         self.storage_status.setText("Cleaning…" if clean else "Checking…")
         def operation(worker):
             if clean:
-                return clean_storage(self.store_path, self._protected_task_id, worker.isInterruptionRequested)
+                return clean_selected_storage(self.store_path, selected, self._protected_task_id, worker.isInterruptionRequested)
             return storage_info(self.store_path, self._protected_task_id)
         def loaded(info):
             self.cache_summary.setText(f"Cached notes: {format_bytes(info['cache_bytes'])}")
-            self.cache_reclaimable.setText(f"Reclaimable: {format_bytes(info['reclaimable_bytes'])} · {info['retention_days']}-day retention")
+            rows = info.get('tasks', [])
+            self.cache_reclaimable.setText(f"{len(rows)} tasks · auto-cleanup ({info['retention_days']} days): {format_bytes(info['reclaimable_bytes'])}")
+            self._show_cache_tasks(rows)
             if clean:
-                self.storage_status.setText(f"Cleared {format_bytes(info['removed_bytes'])} · {info['removed_workspaces']} stale rendering folders removed.")
+                self.storage_status.setText(f"Cleared {format_bytes(info['removed_bytes'])}. Exported notes and Notion pages are kept.")
+                self._select_available_caches(False)
                 self.cache_changed.emit()
             else:
-                self.storage_status.setText("Automatic cleanup runs when the app starts. Saved files are kept.")
+                self.storage_status.setText('Regenerating may use requests again. Protected rows explain why they are kept.' if rows else 'No saved tasks yet.')
         self._start_operation(operation, loaded, self.storage_status.setText)
 
     def _load_catalog(self, paid=False, force=False):

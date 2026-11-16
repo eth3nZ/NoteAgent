@@ -66,8 +66,18 @@ def clean_stale_workspaces(root=None, min_age=86400, now=None, cancel_callback=N
 def storage_info(store_path, protect_task_id=None):
     if not Path(store_path).exists():
         return {'cache_bytes':0, 'reclaimable_bytes':0, 'database_bytes':0,
-                'expired_groups':0, 'duplicate_bodies':0, 'retention_days':30}
-    return TaskStore(store_path).cache_info(protect_task_id=protect_task_id)
+                'expired_groups':0, 'duplicate_bodies':0, 'retention_days':30, 'tasks':[]}
+    store = TaskStore(store_path)
+    return {**store.cache_info(protect_task_id=protect_task_id),
+            'tasks':store.cache_tasks(protect_task_id=protect_task_id)}
+
+
+def clean_selected_storage(store_path, task_ids, protect_task_id=None, cancel_callback=None):
+    """Local DB only: no model or Notion clients, no exported-file deletion."""
+    if not Path(store_path).exists():
+        raise ValueError('Saved tasks are no longer available. Refresh the list.')
+    result = TaskStore(store_path).clean_selected_cache(task_ids, protect_task_id, cancel_callback)
+    return {**storage_info(store_path, protect_task_id), **result}
 
 
 def clean_storage(store_path, protect_task_id=None, cancel_callback=None):

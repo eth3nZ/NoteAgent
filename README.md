@@ -224,14 +224,26 @@ When you next start the app, old plaintext keys are moved in a background worker
 
 Environment variables remain supported and are never copied into Keychain or JSON: `OPENROUTER_API_KEY`, `NOTION_TOKEN`, and `GROQ_API_KEY` for the exact HTTPS `api.groq.com` service on port 443. If an existing macOS Keychain credential is unavailable, the app pauses that connection instead of silently switching to an environment or backup-account key; unlock Keychain and retry Save. On other operating systems, newly entered keys last for the current session only; use environment variables after restarting. Legacy plaintext configurations remain readable, with a migration notice.
 
-The app performs cache cleanup in the background at startup. To check sizes or clean manually, open **Settings → Storage → Clean unused cache**.
+The app performs conservative cache cleanup in the background at startup. For manual cleanup:
+
+1. Open **Settings → Storage**. The list shows each task's document, last-used time, page count, status and cache size.
+2. Check completed tasks, or use **Select available**. Recent completed caches can be cleared manually; they do not need to reach the automatic 30-day limit.
+3. Review the estimated space, then choose **Clear selected cache**. The list refreshes after cleanup. Use the refresh icon to reload it later.
+
+Protected rows explain why they cannot be selected: the current task, unfinished work, pending Notion retries, unresolved paid requests, saved human revisions or a cache with no surviving local export. Protection also applies to tasks sharing that cache. The app checks these conditions again before making any change.
+
+Several tasks can share page results, for example when the same generation is exported in different formats. Row sizes include that shared data; **the selection estimate counts it only once**. Selecting some of those tasks clears their own cached bodies while keeping shared page results for the unselected tasks. Select every related task to clear the shared data too. Displayed sizes measure cached content, not exact disk space; SQLite can reuse freed space even when its file cannot immediately shrink.
+
+**Cleanup does not contact Notion or modify published notes.** Original documents, exported Markdown/Notebook files, task history, human revisions, publication records and fee records are kept. Regenerating cleared content may consume model requests again.
+
+Automatic startup maintenance follows these additional rules:
 
 - Completed cache unused for 30 days can expire when a saved local export still exists.
 - The latest/current task, unfinished tasks, pending Notion retries and uncertain paid requests are retained. A cache with no saved export is kept as a potential only copy.
 - Human revisions and their generated source-page records are retained; cache cleanup does not remove them.
 - Repeated identical document bodies can be compacted while retaining reconstructable page segments.
 - Old, marked rendering workspaces are removed only after their owner process has exited; normal completion/cancellation removes its workspace directly.
-- Cleanup keeps source files, exported notes, remote Notion pages and fee records. Regenerating expired content may consume model requests again.
+- Automatic maintenance only removes eligible cache and stale rendering workspaces; it does not remove task history or exported files.
 
 Historical `acceptance-*` and `ui-review` folders are development records, not application cache. They are not automatically deleted or uploaded with the source code.
 
