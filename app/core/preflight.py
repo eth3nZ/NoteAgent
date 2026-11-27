@@ -9,7 +9,7 @@ from pathlib import Path
 import pymupdf
 from pptx import Presentation
 
-from app.core.cloud import AccountQuota, RequestCancelled, fetch_account_quota, list_note_models
+from app.core.cloud import AccountQuota, RequestCancelled, fetch_account_quota, list_note_models, generation_prompt_hash
 from app.core.configuration import make_model_config
 from app.core.jobs import cache_key_for
 from app.core.prompt_loader import render_prompt
@@ -43,6 +43,7 @@ class DocumentEstimate:
     price_note: str
     backup_enabled: bool
     backup_warning: str = ""
+    reservation_usd: float | None = None
 
 
 def _check(cancel):
@@ -100,7 +101,7 @@ def inspect_document(path, cancel=None):
 
 def build_estimate(document, config, models=(), quota=None, quota_note="", store=None):
     primary = make_model_config(config)
-    prompt_hash = hashlib.sha256(render_prompt("segment_system", language="English").encode()).hexdigest()
+    prompt_hash = generation_prompt_hash()
     key = cache_key_for(document.digest, primary.fingerprint(), prompt_hash, config.get("language", "zh"))
     cached, segment_pages = set(), 8
     if store:
@@ -111,10 +112,10 @@ def build_estimate(document, config, models=(), quota=None, quota_note="", store
     pending = [index for index in range(document.page_count) if index + 1 not in cached]
     requests = math.ceil(len(pending) / segment_pages)
     hosted = config.get("provider") == "openrouter"
-    backup_enabled = hosted and bool(config.get("paid_enabled"))
-    model_id = config.get("paid_model", "") if backup_enabled else ""
+    backup_enabled = (hosted or config.get('provider') == 'gemini') and bool(config.get("paid_enabled")) and not primary.paid
+    model_id = primary.model if primary.paid else config.get("paid_model", "") if backup_enabled else ""
     model = next((model for model in models if model.id == model_id), None)
-    low = high = None
+    low = high = reservation = None
     backup_warning = ""
     note = "No verified price for this service. Custom requests may be billed by the provider."
     if model and not model.free:
@@ -130,7 +131,7 @@ def build_estimate(document, config, models=(), quota=None, quota_note="", store
         extras = len(pending) * model.image_price + requests * model.request_price
         low += extras
         high += extras
-        ceilings = make_model_config(config, paid=True)
+        ceilings = primary if primary.paid else make_model_config(config, paid=True)
         if (ceilings.input_price < model.input_price or ceilings.output_price < model.output_price or
                 ceilings.image_price < model.image_price or ceilings.request_price < model.request_price):
             backup_warning = "Backup price ceilings are below current advertised prices. Select the backup model in Settings to update its price limits."
@@ -145,7 +146,7 @@ def build_estimate(document, config, models=(), quota=None, quota_note="", store
                 else "Paid backup is off. Enable it in Settings to estimate the selected backup's cost.")
     return DocumentEstimate(document, len(cached & set(range(1, document.page_count + 1))), len(pending),
                             segment_pages, requests, quota, quota_note, low, high, model_id, note,
-                            backup_enabled, backup_warning.strip())
+                            backup_enabled, backup_warning.strip(), reservation)
 
 
 class PreflightService:
@@ -164,9 +165,10 @@ class PreflightService:
         if document is None:
             document = inspect_document(path, cancel)
             self._documents = {identity: document}
-        models, quota, quota_note = (), None, "Free allowance is unavailable for custom services."
+        models, quota, quota_note = (), None, ("Google's remaining project quota is not exposed here. Check AI Studio; the app cannot verify the project's billing tier."
+                                             if config.get('provider') == 'gemini' else "Free allowance is unavailable for custom services.")
         price_warning = ""
-        if config.get("provider") == "openrouter":
+        if config.get("provider") == "openrouter" or (config.get('provider') == 'gemini' and config.get('paid_enabled')):
             if self._models is None or refresh or time.time() - self._model_time > 300:
                 try:
                     self._models = list_note_models(cancel_callback=cancel)
@@ -176,6 +178,7 @@ class PreflightService:
                 except Exception:
                     price_warning = "Model prices could not be refreshed; cached prices may be outdated."
             models = self._models or ()
+        if config.get("provider") == "openrouter":
             key = make_model_config(config).api_key
             quota_note = "Add an OpenRouter key to check today's free requests."
             if key:

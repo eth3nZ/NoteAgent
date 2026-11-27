@@ -89,7 +89,7 @@ class SettingsStore:
                     public[key] = raw[key]
             save_config(public, str(self.path))
 
-    def save(self, config, *, changed_secrets=None):
+    def save(self, config, *, changed_secrets=None, confirm_gemini_free=False):
         """Commit new records before references; a failed commit leaves old records intact."""
         with self._lock:
             raw = load_config(str(self.path))
@@ -130,7 +130,23 @@ class SettingsStore:
                         if self.credentials.get(account) != value:
                             raise CredentialError("Keychain verification failed. Original settings were retained.")
                         refs[key] = account
-                public = self._public(config)
+                # Confirmation belongs to a saved credential, never to an arbitrary replacement key.
+                if 'gemini_api_key' in changed:
+                    result['gemini_free_project'] = False
+                    result.pop('gemini_confirmation_ref', None)
+                    result.pop('_gemini_free_session', None)
+                    result.pop('_gemini_free_session_key', None)
+                if confirm_gemini_free:
+                    if refs.get('gemini_api_key'):
+                        result['gemini_free_project'] = True
+                        result['gemini_confirmation_ref'] = refs['gemini_api_key']
+                    else:
+                        import os
+                        result['_gemini_free_session'] = True
+                        secret = result.get('gemini_api_key') or os.environ.get('GEMINI_API_KEY','')
+                        result['_gemini_free_session_key'] = hashlib.sha256(secret.encode()).hexdigest()
+                        result['gemini_free_project'] = False
+                public = self._public(result)
                 public["credential_refs"] = refs
                 save_config(public, str(self.path))
             except Exception:

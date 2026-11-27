@@ -28,3 +28,6 @@ dev_artifacts/
 *.p12
 *.pfx
 *.secrets.json
+node_modules/
+frontend/playwright-report/
+frontend/test-results/

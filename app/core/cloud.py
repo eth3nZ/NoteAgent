@@ -23,6 +23,11 @@ PAID_MODEL = "qwen/qwen3.8-27b"
 BASE_URL = "https://openrouter.ai/api/v1"
 
 
+def generation_prompt_hash():
+    # Version request framing and navigation policy as well as the editable system template.
+    return hashlib.sha256(('segment-request-v3\n' + render_prompt('segment_system', language='English')).encode()).hexdigest()
+
+
 class RequestCancelled(RuntimeError):
     pass
 
@@ -288,10 +293,19 @@ class CloudClient:
             time.sleep(.1)
 
     def prompt_hash(self):
-        return hashlib.sha256(render_prompt("segment_system", language="English").encode()).hexdigest()
+        return generation_prompt_hash()
 
     def set_document_context(self, context):
         self.document_context = context[:8500]
+
+    def quota_day(self, now):
+        from datetime import datetime, timezone
+        return datetime.fromtimestamp(now, timezone.utc).date().isoformat()
+
+    def next_quota_retry(self, now):
+        from datetime import datetime, timedelta, timezone
+        return (datetime.fromtimestamp(now, timezone.utc).replace(hour=0, minute=5, second=0, microsecond=0)
+                + timedelta(days=1)).timestamp()
 
     def generate_segment(self, pages, language="zh", cancel_callback=None, *, probe=False):
         if cancel_callback and cancel_callback():
@@ -300,8 +314,9 @@ class CloudClient:
         parts = [{"type": "text", "text": (
             f"Process ALL original source pages {numbers}. Each image is preceded by its source page number. "
             "Return a JSON object with a notes array, one entry per page: "
-            '{"notes":[{"page":1,"markdown":"## Topic\\nDetailed notes..."}]}. '
-            "Use the original page numbers exactly. A genuinely empty page still needs an entry explaining it.") }]
+            '{"notes":[{"page":1,"markdown":"## Topic\\nDefinition or conclusion, then necessary explanation..."}]}. '
+            "Use the original page numbers exactly. For clearly blank or non-content pages, "
+            "use the non-content receipt specified by the system instructions; do not add filler.") }]
         if self.document_context and not probe:
             parts.append({'type':'text', 'text':self.document_context})
         for page in pages:
@@ -313,7 +328,12 @@ class CloudClient:
             parts.append({"type": "text", "text": (
                 f"Final check: write ALL headings and explanatory prose in {target}. "
                 f"Translate the source explanations into {target}; do not copy them in a different language. "
-                "Keep code and literal strings unchanged. Return only the requested page_notes JSON.")})
+                "Keep each entry grounded in ITS OWN page; do not copy an example or derivation into another page. "
+                "Keep visible code and literal-string blank lines unchanged. Use $...$ or $$...$$ for math. "
+                "Omit incidental timing columns, generated layer names and decorative page narration. "
+                "Keep needed training settings under the relevant concept, not Course requirements. "
+                "Flag a visible code/definition conflict with Source check; do not silently correct the source. "
+                "Return only the requested page_notes JSON.")})
         payload = {
             "model": self.model, "max_tokens": (1024 if self.reasoning_options.get("mandatory") else 256) if probe else self.config.max_tokens,
             "temperature": 0.1, "stream": True, "stream_options": {"include_usage": True},

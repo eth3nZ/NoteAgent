@@ -132,7 +132,8 @@ class EstimateTests(unittest.TestCase):
         document=inspect_document(self.pdf)
         config=cloud_defaults()
         fingerprint=make_model_config(config).fingerprint()
-        prompt=hashlib.sha256(render_prompt("segment_system",language="English").encode()).hexdigest()
+        from app.core.cloud import generation_prompt_hash
+        prompt=generation_prompt_hash()
         key=cache_key_for(document.digest,fingerprint,prompt,"zh")
         store=TaskStore(self.root/'task.sqlite3')
         task=store.create(key,document.digest,{"segment_pages":4})

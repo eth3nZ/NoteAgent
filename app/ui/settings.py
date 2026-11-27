@@ -334,7 +334,8 @@ class SettingsDialog(QDialog):
         self.fields["paid_api_key"].editingFinished.connect(lambda: self._auto_load(paid=True))
         self.fields["base_url"].editingFinished.connect(self._custom_origin_changed)
         for key in SECRET_FIELDS:
-            self.fields[key].textEdited.connect(lambda text, field=key: self._edited_secrets.add(field))
+            if key in self.fields:
+                self.fields[key].textEdited.connect(lambda text, field=key: self._edited_secrets.add(field))
         self.tabs.currentChanged.connect(self._storage_selected)
         self._update_controls()
         if auto_refresh:

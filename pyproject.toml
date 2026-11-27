@@ -1,10 +1,10 @@
 [project]
 name = "noteagent"
-version = "0.2.0"
+version = "0.3.0"
 description = "Convert PDF and PowerPoint course material into Markdown, notebooks, and Notion pages"
 requires-python = ">=3.10"
 dependencies = [
-    "PyQt6>=6.7,<7",
+    "pywebview>=6.2,<6.3; sys_platform == 'darwin'",
     "PyMuPDF>=1.24,<2",
     "python-pptx>=1.0,<2",
     "Pillow>=10,<13",
@@ -16,7 +16,8 @@ dependencies = [
 include = ["app*"]
 
 [tool.setuptools.package-data]
-app = ["assets/*.png", "assets/*.icns", "assets/*.ico", "assets/*.svg"]
+"app" = ["assets/*.png", "assets/*.icns", "assets/*.ico", "assets/*.svg", "web/*.html", "web/assets/*"]
+"app.desktop" = ["*.js"]
 
 [tool.setuptools.data-files]
 prompts = ["prompts/*.md"]

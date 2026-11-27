@@ -5,9 +5,10 @@ import re
 import sys
 from pathlib import Path
 from typing import Any
+from app.core.resources import resource_path
 
 
-DEFAULT_PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
+DEFAULT_PROMPTS_DIR = resource_path('prompts')
 PLACEHOLDER_PATTERN = re.compile(r"\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}")
 
 

@@ -4,9 +4,10 @@ from pathlib import Path
 
 from PyQt6.QtCore import QRect, QSize, Qt
 from PyQt6.QtGui import QIcon, QPainter, QPixmap
+from app.core.resources import resource_path
 
 
-ASSETS = Path(__file__).resolve().parents[1] / "assets"
+ASSETS = resource_path('app/assets')
 
 
 def application_icon() -> QIcon:

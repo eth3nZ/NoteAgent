@@ -1,4 +1,4 @@
-PyQt6>=6.7,<7
+pywebview>=6.2,<6.3; sys_platform == "darwin"
 PyMuPDF>=1.24,<2
 python-pptx>=1.0,<2
 Pillow>=10,<13

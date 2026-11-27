@@ -1,0 +1,124 @@
+{
+  "cases": [
+    {
+      "id": "definition",
+      "source": "Gradient Descent\nGradient descent minimizes a differentiable objective by moving opposite its gradient.\nThe learning rate eta controls the step size.\nw_next = w - eta * gradient(w)",
+      "notes": "## Gradient Descent\n\nGradient descent minimizes a differentiable objective by moving in the direction opposite to its gradient. The learning rate $\\eta$ controls the step size:\n\n$$w_{t+1}=w_t-\\eta\\nabla f(w_t).$$",
+      "literal_checks": [
+        "\\eta",
+        "\\nabla"
+      ]
+    },
+    {
+      "id": "worked-example",
+      "source": "Gradient Descent\nWorked example: f(w) = w^2 and gradient(w) = 2w.\nStart at w_0 = 2 with eta = 0.1.\nw_1 = 2 - 0.1 * 4 = 1.6.\nw_2 = 1.6 - 0.1 * 3.2 = 1.28.\nThe objective decreases from 4 to 2.56 after the first step.",
+      "notes": "## Gradient Descent\n\n### Worked example\n\nFor $f(w)=w^2$, the gradient is $2w$. Starting with $w_0=2$ and $\\eta=0.1$, the first update is $w_1=2-0.1(4)=1.6$. The next update gives $w_2=1.6-0.1(3.2)=1.28$. After the first step, the objective decreases from $4$ to $2.56$.",
+      "literal_checks": [
+        "1.6",
+        "1.28",
+        "2.56"
+      ]
+    },
+    {
+      "id": "code-literals",
+      "source": "Python Example\nPreserve the numeric literal and blank lines inside the string.\nanswer = (\n    42\n)\nmessage = \"\"\"\n123\n\n\nkept  \n\"\"\"\nprint(answer)",
+      "notes": "## Python Example\n\nThe parenthesized expression is the integer $42$, not an empty tuple. Preserve the multiline string exactly.\n\n```python\nanswer = (\n    42\n)\nmessage = \"\"\"\n123\n\n\nkept  \n\"\"\"\nprint(answer)\n```",
+      "literal_checks": [
+        "answer = (\n    42\n)",
+        "123\n\n\nkept  \n"
+      ]
+    },
+    {
+      "id": "scanned-diagram",
+      "source": "Three-layer Network\nInput -> Hidden -> Output\nThe diagram has two input nodes, two hidden nodes and one output node.\nEvery input node connects to each hidden node. Both hidden nodes connect to the output.\nAll arrows point from input toward output.",
+      "image_only": true,
+      "notes": "## Network Structure\n\nThe network contains two input nodes, two hidden nodes and one output node. Every input connects to both hidden nodes, and both hidden nodes connect to the output. All arrows point forward from input through hidden to output.",
+      "literal_checks": [
+        "two input nodes",
+        "two hidden nodes",
+        "one output node"
+      ]
+    },
+    {
+      "id": "demo-divider",
+      "source": "Demo\nMNIST DIGITS",
+      "non_content": true,
+      "notes": "<!-- noteagent:non-content -->",
+      "literal_checks": []
+    },
+    {
+      "id": "concept-first",
+      "source": "Variational Autoencoders\nA variational autoencoder represents each input with a latent distribution.\nThe encoder outputs a mean and log variance; a sampled latent vector enters the decoder.\nTraining combines reconstruction loss and KL divergence.",
+      "notes": "## Variational Autoencoders\n\nA variational autoencoder represents each input with a latent distribution.\n\n- Flow: encoder → mean and log variance → sampling → decoder.\n- Objective: reconstruction loss + KL divergence.",
+      "literal_checks": [
+        "Flow: encoder",
+        "reconstruction loss + KL divergence"
+      ]
+    },
+    {
+      "id": "continued-example",
+      "source": "Variational Autoencoders\nA variational autoencoder represents each input with a latent distribution.\nWorked example: mu=1, log variance=0, epsilon=2.\nsigma=exp(0.5 * 0)=1. z=1+1*2=3.",
+      "notes": "## Variational Autoencoders\n\nA variational autoencoder represents each input with a latent distribution.\n\n### Worked example\n\nFor $\\mu=1$, $\\log\\sigma^2=0$ and $\\epsilon=2$, the standard deviation is $\\sigma=\\exp(0.5\\times0)=1$, so $z=1+1\\times2=3$.",
+      "literal_checks": [
+        "### Worked example",
+        "$z=1+1\\times2=3$"
+      ]
+    },
+    {
+      "id": "source-inconsistency",
+      "source": "VAE sampling code\nlog_var is defined as log(variance).\ndef sample(mu, log_var, epsilon):\n    return mu + epsilon * exp(log_var)",
+      "notes": "## Variational Autoencoders\n\n### Sampling code\n\n```python\ndef sample(mu, log_var, epsilon):\n    return mu + epsilon * exp(log_var)\n```\n\n**Source check:** With `log_var` defined as log variance, `exp(log_var)` is variance, not standard deviation. Verify this scaling against the source before using the snippet.",
+      "literal_checks": [
+        "return mu + epsilon * exp(log_var)",
+        "**Source check:**"
+      ]
+    },
+    {
+      "id": "meaningful-training-results",
+      "source": "VAE Training\nOptimizer: Adam. Epochs: 3. Batch size: 32.\nEpoch 1 loss=4.0, time=6s, step=4ms\nEpoch 2 loss=2.56, time=5s, step=4ms\nEpoch 3 loss=1.6384, time=5s, step=3ms\nModel summary internal layer names: dense_23 and dense_24.\nNo validation metrics are provided.",
+      "notes": "## Variational Autoencoders\n\n### Training results\n\nAdam optimizer; 3 epochs; batch size 32.\n\n| Epoch | Training loss |\n| --- | --- |\n| 1 | 4.0 |\n| 2 | 2.56 |\n| 3 | 1.6384 |\n\nTraining loss decreases; no validation result is shown.",
+      "literal_checks": [
+        "batch size 32",
+        "1.6384",
+        "no validation result is shown"
+      ]
+    },
+    {
+      "id": "thanks-page",
+      "source": "Thank you!\nQuestions?",
+      "non_content": true,
+      "notes": "<!-- noteagent:non-content -->",
+      "literal_checks": []
+    },
+    {
+      "id": "scanned-diagram",
+      "source": "Three-layer Network\nInput -> Hidden -> Output\nThe diagram has two input nodes, two hidden nodes and one output node.\nEvery input node connects to each hidden node. Both hidden nodes connect to the output.\nAll arrows point from input toward output.",
+      "image_only": true,
+      "notes": "## Network Structure\n\nThe network has two input nodes, two hidden nodes and one output node. Every input connects to both hidden nodes; both hidden nodes connect to the output. Signals flow from input through hidden to output.",
+      "literal_checks": [
+        "two input nodes",
+        "two hidden nodes",
+        "one output node"
+      ]
+    },
+    {
+      "id": "generalization",
+      "source": "Generalization\nTraining loss alone does not establish validation performance.\nCompare training and validation loss to assess overfitting.\nDo not conclude that decreasing total loss balances its separate terms.",
+      "notes": "## Generalization\n\nTraining loss alone does not establish validation performance. Compare training and validation loss when assessing overfitting.",
+      "literal_checks": [
+        "validation",
+        "overfitting"
+      ]
+    }
+  ],
+  "manual_review": [
+    "English explanations only; code and proper names unchanged.",
+    "Each topic starts with the definition or conclusion.",
+    "Pages 8 and 9 continue the same VAE topic across the request boundary.",
+    "No title/demo/thank-you filler.",
+    "Formula values and complete worked steps match the source.",
+    "Python code and visible blank lines match exactly; never execute it.",
+    "Network node counts, connectivity and arrow direction are accurate.",
+    "No claims about validation performance based only on training loss."
+  ]
+}

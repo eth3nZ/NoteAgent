@@ -6,7 +6,7 @@ from typing import Protocol
 from urllib.parse import urlparse
 
 
-SECRET_FIELDS = ("api_key", "paid_api_key", "notion_token")
+SECRET_FIELDS = ("api_key", "paid_api_key", "notion_token", "gemini_api_key")
 
 
 class CredentialError(RuntimeError):
@@ -22,9 +22,11 @@ class CredentialStore(Protocol):
 
 
 def credential_origin(config, field="api_key"):
+    if field == "gemini_api_key":
+        return "https://generativelanguage.googleapis.com:443"
     if field == "notion_token":
         return "https://api.notion.com:443"
-    if field == "paid_api_key" or config.get("provider") == "openrouter":
+    if field == "paid_api_key" or config.get("provider") in {"openrouter", "gemini"}:
         return "https://openrouter.ai:443"
     try:
         url = urlparse(config.get("base_url", ""))

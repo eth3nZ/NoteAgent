@@ -4,11 +4,11 @@ Turn PDF and PowerPoint course material into detailed study notes:
 
 **PDF / PPTX → Markdown (`.md`) or Jupyter Notebook (`.ipynb`) → optional Notion page**
 
-NoteAgent is a small Python desktop app built with PyQt6. Models run through a cloud API; you do not need to download or run a local model. The default workflow uses a fixed free OpenRouter model, saves progress locally, and pauses when free requests are unavailable.
+NoteAgent is a macOS desktop app with a React reading interface and a Python core, using the system WebView. Node is only needed for frontend development. Models run through a cloud API; you do not need to download or run a local model. The default workflow uses a fixed free OpenRouter model, saves progress locally, and pauses when free requests are unavailable.
 
-## 1. Install and launch
+## 1. Install and launch (macOS)
 
-You need **Python 3.10 or newer**, an internet connection for generation, and a model-service API key. The commands below are for macOS/Linux; macOS is the current desktop validation target.
+You need **Python 3.10 or newer**, an internet connection for generation, and a model-service API key. The steps below launch the macOS interface. For the older Qt development interface on other platforms, see Development below.
 
 ```bash
 git clone https://github.com/eth3nZ/NoteAgent.git NoteAgent
@@ -43,21 +43,43 @@ Create a key on the [OpenRouter API keys page](https://openrouter.ai/settings/ke
 1. Open **Settings → Models**.
 2. Set **Service** to **OpenRouter**.
 3. Paste your OpenRouter API key into **OpenRouter key**.
-4. Choose a **Free model**. The list loads automatically; use its refresh button if needed.
-5. Select **Test connection**, wait for the image-request result, then **Save**.
+4. Choose a **Generation model** marked **Free**. The list loads automatically; search or refresh if needed.
+5. Select **Save settings**. To test it, reopen Settings and select **Test saved free connection**.
 
-Leave **Use a paid backup** off for a free-only setup. You can also supply the main key through the `OPENROUTER_API_KEY` environment variable instead of saving it in Settings.
+Leave **Configure an OpenRouter paid backup** off for a free-only setup. You can also supply the main key through the `OPENROUTER_API_KEY` environment variable instead of saving it in Settings.
 
 The current default free candidate is `nvidia/nemotron-3.5-super-vl:free`. The app uses the model you select; it does not automatically rotate between different models. The model list filters for image input and advertised strict structured-output support. Gemini and other compatible models can appear in the list. Availability, quotas and regional restrictions depend on the service and hosting provider.
 
 **Test connection consumes a model request.** Refreshing model lists, prices or allowance does not generate notes or upload your document.
 
+## Optional: use Gemini
+
+There are two separate routes. Their keys, quotas and billing are not interchangeable.
+
+| Route | Setup | Charges |
+| --- | --- | --- |
+| **Google Gemini · unbilled project** | Save a Google key and confirm the project has no billing enabled. | Only this user-confirmed free project is supported directly. Remaining requests are **unknown**. |
+| **OpenRouter**, selecting a Gemini model | Keep your OpenRouter key and choose an available Gemini model from its catalog. | Follow OpenRouter pricing; a paid selection requires an explicit paid start and budget reservation. |
+
+For Google direct:
+
+1. Create a key in [Google AI Studio](https://aistudio.google.com/api-keys). Check the associated project's [billing status](https://aistudio.google.com/docs/billing). Use a project **without billing enabled**.
+2. Open **Settings → Models → Service → Google Gemini · unbilled project**.
+3. Enter **Gemini API key**, confirm the unbilled-project checkbox, leave the default `gemini-3.5-flash-lite` or choose another eligible Flash model, and select **Save settings**.
+4. Reopen Settings to refresh the Google catalog or **Test saved free connection**. Testing consumes one free request.
+
+The checkbox records your confirmation; the app cannot determine a project's billing status from the key. Replacing or clearing the key revokes the confirmation. An environment key (`GEMINI_API_KEY`) needs confirmation again after restart. Changing services preserves the separate Google and OpenRouter credentials and sends each only to its intended service.
+
+Google offers a [Flash-Lite free tier](https://aistudio.google.com/docs/models/gemini-3.5-flash-lite#pricing), subject to [project quotas and availability](https://aistudio.google.com/docs/rate-limits). There is no fabricated pages-left counter for Google. Both routes receive the same rendered pages, text, prompts and response schema. Gemini live quality remains **pending** until an unbilled project is configured and confirmed.
+
+To use a paid main model through OpenRouter, select it and save; the main action becomes an explicitly labeled paid start. This is separate from the optional paid backup for a free main model. Both use the existing $0.10/document and $1/month defaults. The estimate shows **expected cost** separately from the **maximum request reservation**; insufficient budgets pause the task instead of raising limits.
+
 ## 3. Create your first note
 
 1. Drop a **PDF or PPTX** into the window, or click the file area to browse.
-2. Choose **Markdown** or **Jupyter Notebook**, the output language, and a save folder.
+2. Choose the language and export format at the top. Open **Note options** (the chevron) to choose a save folder or enable Notion.
 3. Leave **Include source pages** off for cleaner notes, or enable it for page references.
-4. Leave **Send to Notion** off for your first local export, or configure it as described below.
+4. Leave **Publish to Notion** off for your first local export, or configure it as described below.
 5. Check the document estimate, then select **Create notes**.
 
 The app sends extracted text and page images to your selected model in groups of up to eight pages. It preserves accepted groups immediately. If a response is truncated or incomplete, it retries with smaller groups; a persistent single-page failure pauses the task.
@@ -68,26 +90,26 @@ The default style puts definitions, rules and conclusions first, followed by the
 
 Clearly blank pages and pages containing only a cover, outline, biography, decorative quote, thank-you or demo title are still recorded as processed, but do not add filler to the notes. Actionable course requirements are kept briefly. **More → Review sources** remains available for processed pages without note text. If every reviewed page is marked as having no study content, the export says so; unreadable pages must be identified rather than silently omitted.
 
-Each group receives a bounded local outline and previously accepted topic names. Local export joins adjacent identical topic headings and removes an exact repeated introductory paragraph when the same topic continues. Distinct explanations, subtopics, later revisits, math, tables and code are preserved; the app does not guess semantic equivalence. This adds no extra model request or full-document rewrite. Prompt changes invalidate generation caches for new tasks; existing notes, revisions and exports remain available and published Notion pages are not rewritten.
+Each group receives a bounded local outline, previously accepted topic names and up to 2,000 characters of recent accepted prose. Code stays out of this context excerpt. Local export joins adjacent identical topic headings and removes an exact repeated introductory paragraph when the same topic continues. Distinct explanations, subtopics, later revisits, math, tables and code are preserved; the app does not guess semantic equivalence. This adds no extra model request or full-document rewrite. Prompt changes invalidate generation caches for new tasks; existing notes, revisions and exports remain available and published Notion pages are not rewritten.
 
 For prompt editing, the default OpenRouter/cloud flow uses **`prompts/segment_system.md`**. The **`vision_*`** and **`generation_*`** templates serve the older compatible page-analysis flow; editing those alone does not change the default cloud requests.
 
 The language control applies to new generation. Re-exporting saved notes changes their format or source references; it does not translate them.
 
-The main action stays in one place. **More**, beside it, groups editing, source review, re-exporting and Notion actions for the saved notes shown in the preview. Cancel and paid continuation appear only when relevant; the file and settings layout is unchanged.
+The main action stays in one place. **More**, beside it, groups editing, source review, re-exporting and Notion actions for the saved notes shown in the preview. Cancel and paid continuation appear only when relevant; the center of the window stays focused on reading. The contents list can be collapsed, and original pages open in a side panel. Formulas, code and tables render locally.
 
 ### Read the estimate
 
 | Card | What it tells you |
 | --- | --- |
 | **Document** | Total pages, cached pages, and estimated requests still needed. |
-| **Generation model** | The selected model and whether the route is free or custom. |
+| **Model chip** | The selected model and whether the route is free, paid or custom. |
 | **Free today** | The account's reported remaining free requests and approximate page coverage. |
 | **Paid backup** | **Off**, or a rough cost range for the selected backup. |
 
 For example, **36 pages ≈ 5 requests** means five groups of up to eight pages. **50 free requests** is your account allowance, not the number this document needs. Retries, smaller groups and other account use can change the actual coverage. Missing allowance data appears as **Unknown**.
 
-**Refresh** updates allowance, model prices and cached-page counts together. An estimate reads the document locally; it does not submit its contents to the model.
+**Refresh estimate** (the refresh icon) updates allowance, model prices and cached-page counts together. An estimate reads the document locally; it does not submit its contents to the model.
 
 ### Use the right action
 
@@ -151,7 +173,7 @@ These steps use an internal connection token; this version of NoteAgent does not
    | **Page URL** | The destination page link from step 2. |
 
 2. Select **Save**. On macOS, the token is saved in Keychain. `NOTION_TOKEN` is also supported as an environment variable instead of a saved token.
-3. Enable **Send to Notion** in the main window and choose:
+3. Enable **Publish to Notion** in the main window and choose:
 
    | Mode | Result |
    | --- | --- |
@@ -181,7 +203,7 @@ If notes were already published, **More → Send revision** requires confirmatio
 
 ## Free quota and optional paid backup
 
-If the free daily quota is exhausted, the app saves completed pages and schedules a retry for **00:05 UTC the following day**. The status shows that time in your local timezone. Retry happens while the app is open or after it is next launched; no background service is installed.
+If the free daily quota is exhausted, the app saves completed pages and schedules a retry for **00:05 UTC the following day for OpenRouter**, or **00:05 America/Los_Angeles for direct Google Gemini** (including daylight saving time). The status shows that time in your local timezone. Retry happens while the app is open or after it is next launched; no background service is installed.
 
 To prepare a paid fallback, enable **Settings → Models → Use a paid backup**, choose a backup model and set your budgets. The main OpenRouter key is reused unless you enter a separate backup key under **Advanced settings**.
 
@@ -222,7 +244,7 @@ Settings are written atomically with user-only file permissions. On macOS, saved
 
 When you next start the app, old plaintext keys are moved in a background worker: the app writes and reads back the Keychain entries before removing the JSON values. If Keychain is locked or access fails, the original file is retained and an inline message explains how to retry. Unlock your login Keychain in **Keychain Access**, then reopen the app or choose **Settings → Save**. A failed save leaves the settings window open with your input intact. Closing during a save waits for the atomic save to finish. Existing external backups of an old configuration are not erased by migration.
 
-Environment variables remain supported and are never copied into Keychain or JSON: `OPENROUTER_API_KEY`, `NOTION_TOKEN`, and `GROQ_API_KEY` for the exact HTTPS `api.groq.com` service on port 443. If an existing macOS Keychain credential is unavailable, the app pauses that connection instead of silently switching to an environment or backup-account key; unlock Keychain and retry Save. On other operating systems, newly entered keys last for the current session only; use environment variables after restarting. Legacy plaintext configurations remain readable, with a migration notice.
+Environment variables remain supported and are never copied into Keychain or JSON: `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `NOTION_TOKEN`, and `GROQ_API_KEY` for the exact HTTPS `api.groq.com` service on port 443. If an existing macOS Keychain credential is unavailable, the app pauses that connection instead of silently switching to an environment or backup-account key; unlock Keychain and retry Save. On other operating systems, newly entered keys last for the current session only; use environment variables after restarting. Legacy plaintext configurations remain readable, with a migration notice.
 
 The app performs conservative cache cleanup in the background at startup. For manual cleanup:
 
@@ -283,28 +305,85 @@ Repository administrators should also check **GitHub → Settings → Advanced S
 
 ## Verification and current limitations
 
-The automated suite uses local documents and mock HTTP responses; it does not spend API credits. It covers routing, response validation, truncation, caching, recovery, budgets, source review, persistent revisions, independent export/publishing and UI responsiveness. Code checks include numeric-only Python lines, literal strings, blank lines and alternate Markdown fences.
+The offline suite covers both service adapters, credential isolation and migration, resume, truncation, reservations and settlement, revisions, source review, cleanup and the restricted desktop bridge. Frontend tests cover safe Markdown/math rendering and the main user interactions without credentials or cloud calls.
 
-A recorded live test on **2026-11-08** completed a 38-page PDF with the default free candidate: six inference attempts including a connection probe, about 160 seconds, $0 reported cost, and no new inference on its cached rerun. A separate Notion append/readback check covered that output. These results describe those runs, not guaranteed availability or accuracy for other documents.
+The latest real test (**2026-11-26**) used the default free OpenRouter model. The [acceptance report](docs/validation-2026-11-26.md) records manual findings and desktop measurements:
 
-On **2026-11-10**, a four-page English sample was tested with the updated prompt. Across an initial run and one follow-up, three free inference requests were made, including one connection probe, with $0 reported cost and no inference during cache reruns. The follow-up retained the worked-example values, produced LaTeX formulas, joined the continuing topic and described the scanned network correctly. It still omitted two visible blank lines inside a multiline string. This is a partial fidelity pass, not a claim of lossless transcription. No paid requests or Notion writes were made.
+| Test | Result | Generation attempts | Time | Reported cost |
+| --- | --- | --- | --- | --- |
+| Fixed 12-page English sample | 12/12 pages processed; fidelity issues below | 2 | 15.8 s | $0 |
+| One targeted four-page follow-up | Code/math issues persisted | 1 | 5.3 s | $0 |
+| Existing neural-network PDF | 38/38 pages processed | 7, including two failed network attempts | 99.1 s | $0 |
+| Direct Gemini comparison | Pending: no confirmed unbilled project | 0 | — | — |
 
-Known issues and remaining checks:
+No paid model requests or Notion writes were made in these tests. The 38-page run is a baseline, **not a comparison winner**. Results describe these materials and requests, not general model accuracy or future free availability.
 
-- **Writing quality:** the English smoke test covers four pages in one group; coherence across a long document and multiple groups still needs live validation. Local heading merging only recognizes identical adjacent topics; it does not infer whether different titles mean the same thing. Structural validation does not establish factual accuracy.
-- **Code fidelity:** local formatting preserves numeric code lines, literal strings and blank lines. PDF text extraction can omit whitespace, and the model did not recover visible blank-line spacing from the images in the English sample. Ambiguous editor gutter prefixes are retained rather than guessed away. Review important code against the source before running it yourself.
-- **Acceptance coverage:** custom endpoints, real paid requests, use from multiple regions, and a visually complex PPTX still need separate end-to-end checks.
-- **PowerPoint fidelity:** without LibreOffice, SmartArt, charts, grouped shapes and unusual fonts may render imperfectly.
+Known limits:
 
-The app does not automatically execute code, rewrite the whole document in a second model pass, rotate models, or upload original figures to Notion.
+- **Quality still needs review.** The small sample repeated a worked example across pages, kept incidental training logs/layer names, and omitted visible blank lines in code. One follow-up incorrectly explained `exp(log_var)` as standard deviation despite a log-variance definition. The source code was retained, but the requested inconsistency flag was missing. Prompt compliance is not a fact checker.
+- **Source fidelity:** formulas and network relationships passed selected manual checks, not an exhaustive audit. Code is never automatically executed. Verify important derivations and code against **Review sources** before reuse.
+- **Acceptance still pending:** direct Gemini quality, real paid billing, custom endpoints, multiple regions and a visually complex PPTX. Without LibreOffice, complex PowerPoint diagrams and fonts may render imperfectly.
+- **Platform:** the new default targets macOS. The Qt development fallback remains available; Windows/Linux WebView packaging has not been accepted.
+
+The app does not rewrite the whole document in a second model pass, rotate models, or upload original figures to Notion.
 
 ## For development
 
-Run the offline unit suite:
+Install development dependencies, then run the offline Python suite:
 
 ```bash
+.venv/bin/python -m pip install -r requirements-dev.txt
 .venv/bin/python -m unittest discover -s tests -v
 ```
+
+The production frontend is committed under `app/web/`, including formula fonts. Users do **not** need Node. To change it, use Node **22.12+ or 24 LTS**:
+
+```bash
+cd frontend
+npm ci
+npm test
+npm run build
+npx playwright install chromium
+npm run test:e2e
+cd ..
+```
+
+Commit the source and rebuilt `app/web/` together. CI checks they match. Browser interaction tests use mock responses; they do not generate notes or publish to Notion. `npm run dev` is for frontend work, not a second backend.
+
+To run the older Qt interface, install `requirements-dev.txt`, then use `.venv/bin/python main_qt.py`. It uses the same profile and task store; close the other interface first. `NOTEAGENT_CONFIG=/path/to/test/config.json` selects an isolated profile for either entry point.
+
+### Build a macOS app
+
+Use Python **3.12** from python.org or Homebrew for reproducible builds, in a separate environment without Qt:
+
+```bash
+python3.12 -m venv build/release-venv
+build/release-venv/bin/python -m pip install -r requirements.txt 'py2app>=0.28,<1'
+build/release-venv/bin/python scripts/build_macos.py
+```
+
+The latest local build measured **133.9 MiB**, compared with **358.2 MiB** for the matched Qt baseline. Three fresh-profile launches reached the first frontend state in a median **1.60 seconds**; see [measurement boundaries and quality findings](docs/validation-2026-11-26.md).
+
+The result is `dist/NoteAgent.app`. Quit this local app before rebuilding it. The script builds fresh, signs each bundled native library and verifies the bundle's local ad-hoc signature. This is a **local development app, not an Apple-notarized release**. The bundle contains Python and document libraries, but excludes PyQt, Node, Chromium and development test tools. It uses system WKWebView.
+
+To measure the legacy baseline, create a second Python 3.12 environment with `requirements-dev.txt` and run `scripts/build_macos.py --qt` from that environment. Its app is written to `dev_artifacts/packaging-qt/NoteAgent.app`.
+
+### Repeat the quality comparison
+
+```bash
+.venv/bin/python scripts/compare_models.py
+# Optional, consumes at most three generation attempts per free route:
+.venv/bin/python scripts/compare_models.py --live
+```
+
+The first command uses fixtures only and does not assess model quality. The live command uses the fixed free OpenRouter model and an already confirmed unbilled Google project; missing Google configuration stays pending. Review its report manually before a full-document run:
+
+```bash
+.venv/bin/python scripts/compare_models.py --live --winner openrouter \
+  --full-document "/path/to/lecture.pdf" --output-dir dev_artifacts/full-review
+```
+
+`--winner` is an explicit reviewer choice; the script never chooses one by self-scoring. A full run has a seven-attempt cap. English is fixed for these acceptance tests; normal generation follows the app's language setting. No paid route or Notion publishing is allowed by this runner.
 
 Build fixed English material and run offline fidelity checks:
 
@@ -348,11 +427,14 @@ The report records page coverage, request attempts, reported usage/cost and expo
 <details>
 <summary>Implementation and maintenance</summary>
 
-The app uses PyQt6 Widgets with QThread workers, synchronous `httpx`, PyMuPDF, python-pptx, Pillow, nbformat and standard-library SQLite. There is no separate web frontend, backend service or agent framework in the default flow.
+The default app uses React/TypeScript/Vite in pywebview/WKWebView, a restricted command bridge and one serial Python worker. The core uses synchronous `httpx`, PyMuPDF, python-pptx, Pillow, nbformat and standard-library SQLite. No independent API server, account system or second generation pipeline is added. The WebView host serves bundled static assets on loopback; model work stays in Python.
 
-- `app/ui/`: desktop controls, settings, indicators and background workers.
+- `frontend/src/`: reading interface, settings and safe Markdown rendering.
+- `app/web/`: committed production build and local formula fonts.
+- `app/desktop/`: native host, restricted bridge and state/operation service.
+- `app/ui/` and `main_qt.py`: legacy Qt development fallback.
 - `app/core/jobs.py`: serial document tasks, resume, export and publishing.
-- `app/core/cloud.py`: model requests, validation and service errors.
+- `app/core/cloud.py` and `gemini.py`: shared request contract and cloud adapters.
 - `app/core/task_store.py`: checkpoints, cache and the request ledger.
 - `prompts/segment_system.md`: the active note-writing prompt. Editing it invalidates generation cache while keeping existing exports.
 

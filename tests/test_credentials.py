@@ -44,7 +44,7 @@ class CredentialTests(unittest.TestCase):
         self.backend = MemoryCredentials()
         self.store = SettingsStore(self.path, self.backend)
         self.config = {**cloud_defaults(), "api_key": "main-dummy", "paid_api_key": "backup-dummy",
-                       "notion_token": "notion-dummy", "language": "en"}
+                       "notion_token": "notion-dummy", "gemini_api_key":"google-dummy", "language": "en"}
 
     def test_legacy_migration_verifies_all_keys_before_removing_plaintext(self):
         save_config(self.config, str(self.path))
@@ -97,7 +97,7 @@ class CredentialTests(unittest.TestCase):
         cleared = self.store.save({**updated, "api_key": ""}, changed_secrets={"api_key"}).config
         self.assertNotIn("api_key", cleared["credential_refs"])
         self.assertNotIn(updated["credential_refs"]["api_key"], self.backend.values)
-        self.assertEqual(len(self.backend.values), 2)
+        self.assertEqual(len(self.backend.values), 3)
 
     def test_unchanged_keys_and_preferences_never_call_keychain(self):
         config = self.store.save(self.config).config

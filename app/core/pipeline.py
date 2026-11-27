@@ -75,13 +75,14 @@ class Pipeline:
             language: str = "zh", progress_callback=None, stream_callback=None,
             cancel_callback=None, notion_client=None, notion_page_id="", notion_mode="none",
             task_id=None, state_callback=None, allow_paid=False, action="generate",
-            include_source_pages: Optional[bool] = None, revision_markdown: Optional[str] = None) -> PipelineResult:
+            include_source_pages: Optional[bool] = None, revision_markdown: Optional[str] = None,
+            allow_paid_primary: bool = False) -> PipelineResult:
         if hasattr(self.vision_client, "generate_segment") or action != "generate":
             from app.core.jobs import DocumentJob
             return DocumentJob(self).run(
                 input_path, output_dir, output_format, language, progress_callback,
                 stream_callback, cancel_callback, notion_client, notion_page_id,
-                notion_mode, task_id, state_callback, allow_paid, action, include_source_pages, revision_markdown)
+                notion_mode, task_id, state_callback, allow_paid, action, include_source_pages, revision_markdown, allow_paid_primary)
         # Keep the old injected page/generator API working for existing integrations.
         return self._run_legacy(input_path, output_dir, output_format, language,
                                 progress_callback, stream_callback, cancel_callback,

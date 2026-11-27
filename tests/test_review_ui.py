@@ -156,6 +156,9 @@ class ReviewDialogTests(unittest.TestCase):
         dialog.show()
         self.spin(lambda:dialog.worker is None and dialog._loaded_page == 1)
         displayed = dialog._pixmap.toImage()
+        # A queued initial layout may resize the viewport after the render
+        # finishes. Establish its current size before checking unchanged fits.
+        dialog._fit_image()
         key = dialog.image.pixmap().cacheKey()
         dialog._fit_image()
         self.assertEqual(dialog.image.pixmap().cacheKey(),key)

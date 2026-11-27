@@ -40,7 +40,8 @@ class DocumentJob:
 
     def run(self, input_path, output_dir, output_format, language, progress_callback,
             stream_callback, cancel_callback, notion_client, notion_page_id, notion_mode,
-            task_id, state_callback, allow_paid, action, include_source_pages=None, revision_markdown=None):
+            task_id, state_callback, allow_paid, action, include_source_pages=None, revision_markdown=None,
+            allow_paid_primary=False):
         self.progress, self.stream, self.cancel = progress_callback, stream_callback, cancel_callback
         self.state_callback = state_callback
         if output_format not in {"md", "ipynb"} or language not in {"zh", "en"}:
@@ -73,8 +74,8 @@ class DocumentJob:
         doc_hash = digest.hexdigest()
         primary = self.pipeline.vision_client
         backup = self.pipeline.paid_client
-        if primary.config.paid:
-            raise ValueError("The primary profile must be free. Configure paid requests as a manually approved backup.")
+        if primary.config.paid and not allow_paid_primary:
+            raise ValueError('The primary profile must be free unless a paid primary was explicitly approved.')
         key = cache_key_for(doc_hash, primary.config.fingerprint(), primary.prompt_hash(), language,
                             self.SEGMENT_PAGES, self.DPI)
         options = {"input_path": str(path), "output_dir": str(Path(output_dir).expanduser().resolve()),
@@ -149,12 +150,12 @@ class DocumentJob:
                         self._split(pending, segment, learn=True)
                         continue
                     task = self.store.get(self.task_id)
-                    today = datetime.fromtimestamp(self.store.clock(), timezone.utc).date().isoformat()
+                    today = client.quota_day(self.store.clock()) if hasattr(client, 'quota_day') else datetime.fromtimestamp(self.store.clock(), timezone.utc).date().isoformat()
                     after_reset = task["quota_day"] and task["quota_day"] < today
                     if not client.config.paid and (exc.kind == "daily_quota" or (
                         after_reset and exc.kind in {"rate_limit", "network", "service"}
                     )):
-                        self._wait_for_quota()
+                        self._wait_for_quota(client)
                     else:
                         reason = f"page_{numbers[0]}_context" if exc.kind == "context" else exc.kind
                         self.store.update(self.task_id, status="paused", reason=reason)
@@ -239,14 +240,14 @@ class DocumentJob:
                 raise CloudError("The response could not be settled safely.", "uncertain_cost")
             return response
 
-    def _wait_for_quota(self):
+    def _wait_for_quota(self, client=None):
         now = self.store.clock()
-        day = datetime.fromtimestamp(now, timezone.utc).date().isoformat()
+        day = client.quota_day(now) if client and hasattr(client, 'quota_day') else datetime.fromtimestamp(now, timezone.utc).date().isoformat()
         task = self.store.get(self.task_id)
         eligible = bool(task["quota_day"] and task["quota_day"] < day)
         self.store.update(self.task_id, status="waiting_paid" if eligible else "waiting_quota",
                           reason="daily_quota", quota_day=task["quota_day"] or day,
-                          retry_at=None if eligible else next_free_reset(now), paid_eligible=int(eligible))
+                          retry_at=None if eligible else (client.next_quota_retry(now) if client and hasattr(client, 'next_quota_retry') else next_free_reset(now)), paid_eligible=int(eligible))
 
     def _split(self, pending, segment, learn=False):
         middle = len(segment) // 2

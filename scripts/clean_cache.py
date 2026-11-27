@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from PyQt6.QtCore import QLockFile
+from app.core.profile_lock import ProfileLock as QLockFile
 
 from app.core.maintenance import clean_storage, storage_info
 from app.core.task_store import TaskBusy

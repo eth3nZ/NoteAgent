@@ -1,0 +1,2 @@
+# Review frontend sources; bundled vendor strings can contain intentional whitespace.
+app/web/** linguist-generated=true -whitespace
